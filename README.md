@@ -6,6 +6,7 @@ RDKit, AutoDock Vina / smina, fpocket, ChEMBL, the PDB — wrapped as MCP tool
 servers, driven by LLM agents, and checked by a validation harness that will
 tell you when the results are meaningless.
 
+[![CI](https://github.com/deknapp/chilecule/actions/workflows/ci.yml/badge.svg)](https://github.com/deknapp/chilecule/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 [![Dependencies](https://img.shields.io/badge/deps-license--audited-brightgreen.svg)](docs/LICENSING.md)
@@ -47,6 +48,10 @@ a theoretical maximum of 48.5**, with random at 0.7 ± 2.1 — measured over 20
 replicates subsampled to a realistic 2% active fraction, because ChEMBL yields
 ~50% actives and on such a set even a perfect method cannot post a meaningful
 enrichment factor.
+
+Every number above, plus the commands to reproduce it, is in
+**[docs/VALIDATION.md](docs/VALIDATION.md)** — including a section on what is
+*not* validated.
 
 ---
 
@@ -120,6 +125,9 @@ evidence rather than ranking on them anyway.
 The one that makes the others answerable. Checks the negative set for bias,
 then measures ROC-AUC, BEDROC, and enrichment factors against their ceilings,
 with a random baseline and a drug-likeness-only control.
+
+Runnable versions of all four, with real output, are in
+[`examples/`](examples/).
 
 ---
 
@@ -225,7 +233,9 @@ DrugBank is CC BY-NC and is deliberately not wired in.
 This is a working v0.1, not a finished product. What is honest to say about it:
 
 **Implemented and verified against real data:** all four workflows, the full
-tool layer, the validation harness, the MCP server, the local runner.
+tool layer, the validation harness, the MCP server, the local runner. 92 tests,
+of which 81 run with no network and no external binaries; the rest exercise
+live ChEMBL, PDBe, RCSB, smina and fpocket.
 
 **Scaffolded, not implemented:** the AWS Batch runner. The `Runner` interface
 is fixed and documented, and `docs/ARCHITECTURE.md` describes what building the
