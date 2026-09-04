@@ -213,7 +213,8 @@ def decoy_bias_report(
         return BiasReport(
             float("nan"), len(actives), len(decoys), [],
             "unavailable",
-            "scikit-learn is required for the bias check: pip install 'chilecule[ml]'",
+            "scikit-learn is required for the bias check and is a core "
+            "dependency; reinstall with: pip install -e .",
         )
 
     active_props = describe(actives[smiles_col].tolist())

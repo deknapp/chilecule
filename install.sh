@@ -92,8 +92,8 @@ uv venv --python "$PYTHON_VERSION" "$VENV_DIR" >/dev/null
 EXTRAS=""
 case "$TIER" in
     core) EXTRAS="" ;;
-    dock) EXTRAS="[ml]" ;;
-    all)  EXTRAS="[ml,mcp,agent,dev]" ;;
+    dock) EXTRAS="" ;;
+    all)  EXTRAS="[mcp,agent,dev]" ;;
 esac
 
 info "installing chilecule${EXTRAS} and dependencies"
