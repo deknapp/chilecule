@@ -161,3 +161,49 @@ def test_free_wilson_reports_cross_validated_fit(para_series):
     if model is not None and model.warning is None:
         assert 0.0 <= model.r_squared <= 1.0
         assert "extrapolate" in model.to_dict()["limitation"]
+
+
+def test_no_analog_diagnosis_distinguishes_enantiomer_swaps():
+    """An empty result must say which of three things happened.
+
+    Found by running the pipeline on DRD2: the only transformations touching an
+    aminotetralin scaffold are enantiomer swaps, and a parent already in the
+    produced configuration yields nothing. That is a real finding about the SAR
+    of that scaffold, and a bare empty list hides it.
+    """
+    from chilecule.tools.design import diagnose_no_analogs
+
+    swap = Transformation(
+        lhs="Oc1cccc2c1CC[C@@H]([*:1])C2", rhs="Oc1cccc2c1CC[C@H]([*:1])C2",
+        context="N", n_pairs=5, median_delta=1.0, std_delta=0.2,
+        min_delta=0.5, max_delta=1.5,
+    )
+    diagnosis = diagnose_no_analogs("CCCN(CCC)[C@H]1CCc2c(O)cccc2C1", [swap])
+    assert diagnosis.n_enantiomer_swaps == 1
+    assert "enantiomer" in diagnosis.explanation
+    assert diagnosis.examples
+
+
+def test_no_analog_diagnosis_reports_fragment_mismatch():
+    from chilecule.tools.design import diagnose_no_analogs
+
+    unrelated = Transformation(
+        lhs="[*:1]C1CCCCC1", rhs="[*:1]C1CCCC1", context="c",
+        n_pairs=5, median_delta=0.3, std_delta=0.1, min_delta=0.1, max_delta=0.5,
+    )
+    diagnosis = diagnose_no_analogs("CC(=O)Oc1ccccc1C(=O)O", [unrelated])
+    assert diagnosis.n_fragment_mismatch == 1
+    assert "does not have" in diagnosis.explanation
+
+
+def test_ignore_stereo_is_opt_in():
+    """Enantiomers differ in potency by orders of magnitude; transferring a
+    matched-pair statistic across them must be a deliberate choice."""
+    swap = Transformation(
+        lhs="Oc1cccc2c1CC[C@@H]([*:1])C2", rhs="CC[*:1]",
+        context="N", n_pairs=5, median_delta=1.0, std_delta=0.2,
+        min_delta=0.5, max_delta=1.5,
+    )
+    parent = "CCCN(CCC)[C@H]1CCc2c(O)cccc2C1"
+    assert apply_transformation(parent, swap) == []
+    assert apply_transformation(parent, swap, ignore_stereo=True)

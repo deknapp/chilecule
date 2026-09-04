@@ -610,7 +610,7 @@ def design_analogs(
     ``target`` is a gene symbol or ChEMBL id, e.g. 'EGFR' or 'CHEMBL203'.
     """
     from ..tools.chembl import curate_activities
-    from ..tools.design import enumerate_analogs, mine_transformations
+    from ..tools.design import diagnose_no_analogs, enumerate_analogs, mine_transformations
 
     client = _client()
     targets = client.find_targets(target)
@@ -646,12 +646,12 @@ def design_analogs(
         max_total=max_analogs,
     )
     if not proposals:
+        diagnosis = diagnose_no_analogs(parent_smiles, transformations)
         return ErrorResult(
-            error="none of the mined transformations apply to this parent",
+            error="no analogs could be proposed for this parent",
             suggestion=(
-                "No fragment of the parent matches the left-hand side of any transformation "
-                "with a track record on this target. The changes that worked here were made "
-                "at positions this compound does not have."
+                f"{diagnosis.explanation} This is a finding rather than a failure -- report "
+                "it as one, and do not retry with looser parameters hoping for a list."
             ),
         )
 

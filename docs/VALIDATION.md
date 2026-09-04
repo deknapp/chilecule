@@ -149,7 +149,55 @@ binding energy per heavy atom than an organic ligand can deliver.
 
 ---
 
-## 6. Does the agent behave correctly?
+## 6. Does any of this work beyond EGFR?
+
+Every figure above is EGFR, and a kinase with a deep, well-defined ATP site is
+close to the best case for all of this. The molecule-in pipeline was therefore
+run unchanged across six target classes, each with a parent from that class's
+own chemotype.
+
+| Target | Class | Curated | Transformations | Analogs | Implausible |
+|---|---|---|---|---|---|
+| EGFR | kinase | 1,523 | 119 | 20 | 0 |
+| DRD2 | GPCR | 1,831 | 25 | 0 | 0 |
+| F2 (thrombin) | serine protease | 2,018 | 34 | 4 | 0 |
+| BACE1 | aspartyl protease | 1,651 | 25 | 2 | 0 |
+| NR3C1 | nuclear receptor | 1,161 | 30 | 9 | 0 |
+| CA2 | metalloenzyme | 1,751 | 72 | 0 | 0 |
+
+**Zero chemically implausible structures across all six**, so the
+attachment-context fix holds outside the chemotype it was found on.
+
+The mined transformations are chemotype-appropriate without being told the
+target class. Thrombin's highest-ranked change is
+`NCCCC[*:1] >> NC(N)=NCCC[*:1]` — a lysine-like amine becoming an
+arginine-like guanidine, which is exactly the S1 pocket recognition element of
+thrombin inhibitors. Carbonic anhydrase's are all sulfonamide modifications,
+which is the zinc-binding group.
+
+**Two targets returned nothing, and finding out why was the point of the
+exercise.**
+
+- **DRD2**: the only transformations touching an aminotetralin scaffold are
+  *enantiomer swaps*, and the parent was already the configuration they produce.
+  That is a real statement about that scaffold's SAR — chirality is most of it —
+  and it was invisible until the pipeline was asked to explain an empty result.
+- **CA2**: none of 72 transformations matches a fragment of a simple
+  benzenesulfonamide in the environment it was observed in.
+
+Both now come back with a diagnosis naming which of three things happened
+(enantiomer swap already made, blocked only by stereochemistry, or no fragment
+match at all) rather than an empty list. `ignore_stereo` exists for the middle
+case and is off by default, because enantiomers routinely differ in potency by
+two orders of magnitude.
+
+**What this does not show.** All six are targets with 1,000+ curated compounds.
+Nothing here says how the pipeline behaves on a target with 50, which is the
+situation on a genuinely novel program.
+
+---
+
+## 7. Does the agent behave correctly?
 
 Six behavioural cases, run against the live API (`python evals/agent_eval.py`).
 Each exists because the behaviour it checks is one a language model gets wrong
@@ -196,10 +244,13 @@ Honesty about coverage is part of the point:
 - **No prospective validation.** Nothing here has been tested against compounds
   synthesized after the fact. Retrospective enrichment is a necessary condition,
   not a sufficient one.
-- **One target.** These numbers are EGFR. A kinase with a deep, well-defined ATP
-  site is close to the best case for docking. Results on a shallow
-  protein–protein interface would be worse, and should be measured rather than
-  assumed.
+- **The structure-based numbers are one target.** Section 6 exercises the
+  ligand-based pipeline across six target classes, but the docking and pocket
+  results are EGFR only. A shallow protein–protein interface would be worse, and
+  should be measured rather than assumed.
+- **Every target tested is data-rich.** All six have over a thousand curated
+  compounds. A genuinely novel target has fifty, and nothing here characterises
+  that regime.
 - **No pose-quality check beyond redocking.** PoseBusters-style physical
   plausibility checks on docked poses are not implemented.
 - **The agent eval is small.** Six behavioural cases in `evals/agent_eval.py`,

@@ -20,7 +20,11 @@ from ..tools import synth
 from ..tools.alerts import screen
 from ..tools.chem import properties
 from ..tools.chembl import ChemblClient, curate_activities
-from ..tools.design import enumerate_analogs, mine_transformations
+from ..tools.design import (
+    diagnose_no_analogs,
+    enumerate_analogs,
+    mine_transformations,
+)
 from ..tools.lookup import check_novelty
 from .report import Report, Section, base_provenance
 
@@ -119,13 +123,29 @@ def build(
         max_total=max_analogs,
     )
     if not proposals:
-        report.warn(
-            "None of the mined transformations apply to this parent -- no fragment of the "
-            "parent matches the left-hand side of any transformation with a track record. "
-            "That is a real answer: the changes that worked on this target were made at "
-            "positions this compound does not have."
+        diagnosis = diagnose_no_analogs(parent_smiles, transformations)
+        report.warn(f"No analogs proposed. {diagnosis.explanation}")
+        report.add(
+            Section(
+                title="Why nothing was proposed",
+                body=(
+                    f"{diagnosis.explanation}\n\n"
+                    "An empty result is a finding, not a failure, but only if it says "
+                    "which of three things happened: the transformation is an enantiomer "
+                    "swap this compound has already made, it would apply but for "
+                    "stereochemistry, or no fragment matches in the attachment "
+                    "environment it was observed in.\n\n"
+                    + (
+                        "Examples:\n" + "\n".join(f"- `{e}`" for e in diagnosis.examples)
+                        if diagnosis.examples else ""
+                    )
+                ),
+                data=diagnosis.to_dict(),
+            )
         )
-        report.provenance = base_provenance(target=target, chembl_release=release)
+        report.provenance = base_provenance(
+            target=target, chembl_release=release, n_transformations=len(transformations)
+        )
         return report
 
     out_of_domain = [p for p in proposals if not p.in_evidence_domain]

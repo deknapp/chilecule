@@ -167,8 +167,16 @@ def mine_transformations(
     return sorted(transformations, key=lambda t: -t.median_delta)
 
 
-def _canonical_fragment(smiles: str) -> str | None:
-    """Canonical form of a fragment carrying an attachment point."""
+def _canonical_fragment(smiles: str, ignore_stereo: bool = False) -> str | None:
+    """Canonical form of a fragment carrying an attachment point.
+
+    ``ignore_stereo`` strips stereochemistry before canonicalizing, which makes
+    a transformation mined on one enantiomer match the other. That is off by
+    default: enantiomers routinely differ in potency by two orders of magnitude,
+    so transferring a matched-pair statistic across them is not justified.
+    It is available because the alternative -- silently returning nothing -- is
+    a worse answer than an explicitly caveated one.
+    """
     mol = Chem.MolFromSmiles(smiles, sanitize=False)
     if mol is None:
         return None
@@ -178,10 +186,14 @@ def _canonical_fragment(smiles: str) -> str | None:
         )
     except Exception:
         return None
+    if ignore_stereo:
+        Chem.RemoveStereochemistry(mol)
     return Chem.MolToSmiles(mol)
 
 
-def apply_transformation(smiles: str, transformation: Transformation) -> list[str]:
+def apply_transformation(
+    smiles: str, transformation: Transformation, *, ignore_stereo: bool = False
+) -> list[str]:
     """Apply one transformation to a molecule, returning every distinct product.
 
     Works by the same single-cut fragmentation used to mine the transformation
@@ -195,7 +207,7 @@ def apply_transformation(smiles: str, transformation: Transformation) -> list[st
     if mol is None:
         return []
 
-    wanted = _canonical_fragment(transformation.lhs)
+    wanted = _canonical_fragment(transformation.lhs, ignore_stereo)
     replacement = Chem.MolFromSmiles(transformation.rhs, sanitize=False)
     if wanted is None or replacement is None:
         return []
@@ -212,7 +224,7 @@ def apply_transformation(smiles: str, transformation: Transformation) -> list[st
             continue
         left, right = piece.split(".", 1)
         for keep, changed in ((left, right), (right, left)):
-            if _canonical_fragment(changed) != wanted:
+            if _canonical_fragment(changed, ignore_stereo) != wanted:
                 continue
             # The transformation is only valid where it was observed. Applying
             # "methyl becomes bromo" to the methyl of a methoxy group yields a
@@ -281,6 +293,91 @@ class AnalogProposal:
         }
 
 
+@dataclass
+class NoAnalogDiagnosis:
+    """Why nothing was proposed. An empty list is not an answer."""
+
+    n_transformations: int
+    n_enantiomer_swaps: int = 0
+    n_stereo_blocked: int = 0
+    n_fragment_mismatch: int = 0
+    examples: list[str] = field(default_factory=list)
+
+    @property
+    def explanation(self) -> str:
+        if self.n_transformations == 0:
+            return (
+                "No transformation was observed often enough on this target to propose "
+                "from. Either there is too little data, or its chemical matter is too "
+                "diverse for matched-pair analysis."
+            )
+        parts = []
+        if self.n_enantiomer_swaps:
+            parts.append(
+                f"{self.n_enantiomer_swaps} of the applicable transformations are "
+                "enantiomer swaps, and this parent is already the configuration they "
+                "produce -- the SAR on this scaffold is largely about chirality, which "
+                "is itself the finding"
+            )
+        if self.n_stereo_blocked:
+            parts.append(
+                f"{self.n_stereo_blocked} would apply but for stereochemistry: there is "
+                "a rule for the opposite enantiomer of a fragment in this parent. Re-run "
+                "with ignore_stereo=True to see them, bearing in mind that enantiomers "
+                "routinely differ in potency by two orders of magnitude"
+            )
+        if self.n_fragment_mismatch and not parts:
+            parts.append(
+                f"none of the {self.n_transformations} transformations matches a fragment "
+                "of this parent in the attachment environment it was observed in. The "
+                "changes that worked on this target were made at positions this compound "
+                "does not have"
+            )
+        return ". ".join(parts) + "." if parts else (
+            f"None of the {self.n_transformations} transformations applies to this parent."
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "n_transformations": self.n_transformations,
+            "n_enantiomer_swaps": self.n_enantiomer_swaps,
+            "n_stereo_blocked": self.n_stereo_blocked,
+            "n_fragment_mismatch": self.n_fragment_mismatch,
+            "explanation": self.explanation,
+            "examples": self.examples,
+        }
+
+
+def diagnose_no_analogs(
+    parent_smiles: str, transformations: list[Transformation]
+) -> NoAnalogDiagnosis:
+    """Explain why a parent produced no proposals.
+
+    Three distinguishable reasons, and a chemist should be told which:
+    the transformation is an enantiomer swap this compound has already made,
+    it would apply but for stereochemistry, or no fragment matches at all.
+    """
+    diagnosis = NoAnalogDiagnosis(n_transformations=len(transformations))
+    for transformation in transformations:
+        if apply_transformation(parent_smiles, transformation):
+            continue
+        loose = apply_transformation(parent_smiles, transformation, ignore_stereo=True)
+        same_skeleton = _canonical_fragment(transformation.lhs, True) == _canonical_fragment(
+            transformation.rhs, True
+        )
+        if same_skeleton:
+            diagnosis.n_enantiomer_swaps += 1
+            if len(diagnosis.examples) < 3:
+                diagnosis.examples.append(transformation.label)
+        elif loose:
+            diagnosis.n_stereo_blocked += 1
+            if len(diagnosis.examples) < 3:
+                diagnosis.examples.append(transformation.label)
+        else:
+            diagnosis.n_fragment_mismatch += 1
+    return diagnosis
+
+
 def enumerate_analogs(
     parent_smiles: str,
     transformations: list[Transformation],
@@ -289,6 +386,7 @@ def enumerate_analogs(
     domain_similarity_threshold: float = 0.4,
     max_per_transformation: int = 3,
     max_total: int = 200,
+    ignore_stereo: bool = False,
 ) -> list[AnalogProposal]:
     """Apply every transformation to a parent and collect the proposals.
 
@@ -312,7 +410,9 @@ def enumerate_analogs(
     proposals: list[AnalogProposal] = []
     seen: set[str] = {parent.smiles}
     for transformation in transformations:
-        products = apply_transformation(parent.smiles, transformation)
+        products = apply_transformation(
+            parent.smiles, transformation, ignore_stereo=ignore_stereo
+        )
         for product in products[:max_per_transformation]:
             if product in seen:
                 continue
