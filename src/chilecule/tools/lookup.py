@@ -201,51 +201,6 @@ def _chembl_neighbours(
     return neighbours
 
 
-# Heuristic target-family classification from the ChEMBL preferred name.
-#
-# ChEMBL's own protein classification requires a separate API call per target,
-# which is too slow for an interactive profile. Keyword matching on the target
-# name is crude, and it is labelled as crude wherever it is reported -- but it
-# answers the only question that matters here, which is whether a compound's
-# targets are related to each other. The count alone does not: erlotinib has
-# 203 reported targets and is not promiscuous in any meaningful sense, because
-# essentially all of them are kinases in a kinome panel.
-TARGET_FAMILY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("kinase", ("kinase", "kinase-like")),
-    ("protease", ("protease", "peptidase", "cathepsin", "caspase", "thrombin",
-                  "trypsin", "elastase", "matrix metallo")),
-    ("GPCR", ("receptor" ,)),  # narrowed below by the ion-channel/NR checks
-    ("nuclear receptor", ("nuclear receptor", "estrogen receptor",
-                          "androgen receptor", "glucocorticoid receptor",
-                          "retinoic acid receptor", "peroxisome proliferator")),
-    ("ion channel", ("channel", "transporter")),
-    ("oxidoreductase", ("reductase", "oxidase", "dehydrogenase", "synthase",
-                        "cytochrome", "monoamine oxidase")),
-    ("transferase", ("transferase", "methyltransferase", "acetyltransferase")),
-    ("hydrolase", ("hydrolase", "esterase", "lipase", "phosphatase",
-                   "phosphodiesterase")),
-    ("epigenetic", ("histone", "bromodomain", "deacetylase", "demethylase")),
-    ("other enzyme", ("enzyme", "ase")),
-)
-
-
-def target_family(target_name: str) -> str:
-    """Best-effort family for a ChEMBL target name. Heuristic, by design."""
-    name = (target_name or "").lower()
-    # Order matters: the more specific patterns are tested before "receptor",
-    # which would otherwise swallow nuclear receptors and ion channels.
-    for family in ("nuclear receptor", "ion channel", "epigenetic", "kinase",
-                   "protease", "oxidoreductase", "transferase", "hydrolase"):
-        keywords = dict(TARGET_FAMILY_KEYWORDS)[family]
-        if any(keyword in name for keyword in keywords):
-            return family
-    if "receptor" in name:
-        return "GPCR / receptor"
-    if name.endswith("ase") or "enzyme" in name:
-        return "other enzyme"
-    return "other"
-
-
 @dataclass
 class PromiscuityReport:
     """What a compound has been reported to hit, across every ChEMBL target."""
@@ -254,78 +209,92 @@ class PromiscuityReport:
     n_targets: int = 0
     n_records: int = 0
     targets: list[dict] = field(default_factory=list)
-    families: dict[str, int] = field(default_factory=dict)
+    n_non_protein_excluded: int = 0
     error: str | None = None
 
     @property
-    def n_families(self) -> int:
-        return len(self.families)
+    def selectivity_window(self) -> float | None:
+        """Log units between the best target and the median of the others.
 
-    @property
-    def dominant_family_share(self) -> float:
-        if not self.families:
-            return 0.0
-        return max(self.families.values()) / sum(self.families.values())
+        This is the signal that the raw target count is not. A compound with a
+        3-log window has a primary target and a long tail of weak off-target
+        annotations, which is what a selective inhibitor looks like after it
+        has been through a panel. A compound hitting fifteen unrelated proteins
+        all within half a log of each other is not selective for anything, and
+        that flat profile is the signature of an aggregator, a reactive
+        electrophile, or assay interference.
+
+        It needs no target classification, which is why it is used here: the
+        obvious alternative -- bucketing targets into families -- requires
+        either a per-target API call or keyword matching on target names, and
+        keyword matching puts EGFR in the GPCR bucket.
+        """
+        potencies = sorted((t["best_pchembl"] for t in self.targets), reverse=True)
+        if len(potencies) < 3:
+            return None
+        rest = potencies[1:]
+        median = rest[len(rest) // 2] if len(rest) % 2 else (
+            (rest[len(rest) // 2 - 1] + rest[len(rest) // 2]) / 2
+        )
+        return round(potencies[0] - median, 2)
 
     @property
     def assessment(self) -> str:
         """Read the target list the way a chemist would.
 
-        The raw count is close to useless on its own. Erlotinib has over 200
-        reported targets and is not promiscuous in any troubling sense: they
-        are nearly all kinases from panel profiling, which is exactly what a
-        kinase inhibitor is meant to be tested against. Aspirin has a dozen,
-        spread across unrelated protein classes.
+        The raw count is close to useless on its own. Erlotinib has over a
+        hundred reported protein targets and is not promiscuous in any
+        troubling sense -- it is a kinase inhibitor that has been through
+        kinome panels, and a panel result is an annotation, not a liability.
 
-        So the signal is concentration, not count. Many targets inside one
-        family is ordinary polypharmacology. Fewer targets scattered across
-        kinases, GPCRs and proteases is the signature of an aggregator, a
-        reactive electrophile, or assay interference.
+        What separates that from a genuine frequent hitter is whether there is
+        a primary target at all. See :attr:`selectivity_window`.
         """
         if self.error:
             return "no promiscuity data retrieved"
         if self.n_targets == 0:
             return (
-                "no bioactivity records -- meaning this compound has not been tested, "
-                "not that it is clean"
+                "no protein bioactivity records -- meaning this compound has not been "
+                "tested, not that it is clean"
             )
         if self.n_targets == 1:
-            return "single reported target"
+            return "single reported protein target"
 
-        share = self.dominant_family_share
-        dominant = max(self.families, key=self.families.get) if self.families else "unknown"
-        head = f"{self.n_targets} reported targets across {self.n_families} target families"
+        window = self.selectivity_window
+        head = f"{self.n_targets} distinct protein targets with pChEMBL >= 5"
+        if self.n_non_protein_excluded:
+            head += (
+                f" ({self.n_non_protein_excluded} cell-line and other non-protein "
+                "entries excluded)"
+            )
 
-        if share >= 0.7:
+        if window is None:
+            return f"{head}. Too few targets to judge selectivity."
+        if window >= 2.0:
             return (
-                f"{head}, {share:.0%} of them {dominant}. Concentrated in one family, which "
-                "is ordinary polypharmacology for this chemotype rather than a red flag -- "
-                "panel profiling inflates the raw count."
+                f"{head}. Clear primary target: {window} log units better than the median "
+                "of the rest, so the long tail is panel annotation rather than promiscuity."
             )
-        if self.n_targets <= 5:
-            return f"{head}. Unremarkable."
-        if self.n_families >= 4 and self.n_targets >= 8:
+        if window >= 1.0:
             return (
-                f"{head} with no dominant family ({share:.0%} {dominant}). Activity spread "
-                "across unrelated protein classes is the signature of an aggregator, a "
-                "reactive compound, or assay interference. Worth a counterscreen and a "
-                "detergent control before believing any single result."
+                f"{head}. Moderate selectivity window ({window} log units over the median "
+                "of the others). Ordinary polypharmacology; worth knowing what else is hit."
             )
-        return f"{head}, {share:.0%} {dominant}. Check whether the targets are related."
+        return (
+            f"{head}, and no primary target stands out -- the best is only {window} log "
+            "units above the median of the rest. A flat profile across many proteins is "
+            "the signature of an aggregator, a reactive compound, or assay interference. "
+            "Run a detergent control and a counterscreen before believing any single result."
+        )
 
     def to_dict(self) -> dict:
         return {
             "chembl_id": self.chembl_id,
-            "n_targets": self.n_targets,
-            "n_target_families": self.n_families,
-            "families": self.families,
-            "dominant_family_share": round(self.dominant_family_share, 3),
+            "n_protein_targets": self.n_targets,
+            "n_non_protein_excluded": self.n_non_protein_excluded,
+            "selectivity_window_log": self.selectivity_window,
             "n_activity_records": self.n_records,
             "assessment": self.assessment,
-            "classification_caveat": (
-                "Target families are inferred by keyword from the ChEMBL preferred name, "
-                "not from ChEMBL's own protein classification. Treat as indicative."
-            ),
             "targets": self.targets,
             "error": self.error,
         }
@@ -341,11 +310,18 @@ def check_promiscuity(
     """Summarize a compound's reported activity across all ChEMBL targets.
 
     ``min_pchembl`` of 5.0 (10 uM) filters out the weak measurements that
-    otherwise make every compound look promiscuous. Only protein targets are
-    counted; ChEMBL's 'NON-PROTEIN TARGET' and 'Unchecked' entries carry no
-    interpretable selectivity information. Orthologs are collapsed -- the
-    question is how many distinct proteins the compound hits, not how many
-    species they were measured in.
+    otherwise make every compound look promiscuous.
+
+    Only ``SINGLE PROTEIN`` and ``PROTEIN COMPLEX`` targets are counted, and
+    the target types are looked up from ChEMBL rather than guessed from names.
+    This matters more than it sounds: a large share of a well-studied
+    compound's activity records are cytotoxicity measurements against cell
+    lines -- MCF7, A549, HepG2 -- which ChEMBL stores as targets. Counting
+    those makes every oncology compound look wildly promiscuous when what has
+    actually happened is that someone ran an NCI-60 panel.
+
+    Orthologs are collapsed. The question is how many distinct proteins the
+    compound hits, not how many species it was measured in.
     """
     report = PromiscuityReport(chembl_id=chembl_id)
     try:
@@ -367,10 +343,12 @@ def check_promiscuity(
 
     counts: Counter = Counter()
     potency: dict[tuple, float] = {}
+    seen_target_ids: set[str] = set()
     for activity in activities:
         name = activity.get("target_pref_name")
         organism = activity.get("target_organism")
-        if not name or name in {"NON-PROTEIN TARGET", "Unchecked"}:
+        target_id = activity.get("target_chembl_id")
+        if not name or not target_id or name in {"NON-PROTEIN TARGET", "Unchecked"}:
             continue
         try:
             pchembl = float(activity.get("pchembl_value"))
@@ -378,22 +356,27 @@ def check_promiscuity(
             continue
         if pchembl < min_pchembl:
             continue
-        key = (name, organism, activity.get("target_chembl_id"))
+        seen_target_ids.add(target_id)
+        key = (name, organism, target_id)
         counts[key] += 1
         potency[key] = max(potency.get(key, 0.0), pchembl)
+
+    protein_targets = _protein_target_ids(seen_target_ids, timeout)
+    if protein_targets is not None:
+        excluded = {k for k in counts if k[2] not in protein_targets}
+        report.n_non_protein_excluded = len({k[0] for k in excluded})
+        for key in excluded:
+            del counts[key]
+            potency.pop(key, None)
 
     # Count distinct target NAMES, not (name, organism) pairs. Human and sheep
     # COX-1 are one target for this purpose, and counting orthologs separately
     # inflates the promiscuity of exactly the well-studied compounds that get
     # tested in several species -- aspirin scores 16 that way and 9 correctly.
     report.n_targets = len({name for name, _organism, _id in counts})
-    report.families = dict(
-        Counter(target_family(name) for name, _organism, _id in counts).most_common()
-    )
     report.targets = [
         {
             "target": name,
-            "family": target_family(name),
             "organism": organism,
             "target_chembl_id": target_id,
             "n_measurements": n,
@@ -402,6 +385,40 @@ def check_promiscuity(
         for (name, organism, target_id), n in counts.most_common(25)
     ]
     return report
+
+
+# ChEMBL target types that represent a protein whose inhibition means something
+# structurally. CELL-LINE, ORGANISM, TISSUE and the rest are phenotypic
+# readouts and are excluded from a selectivity assessment.
+PROTEIN_TARGET_TYPES = {"SINGLE PROTEIN", "PROTEIN COMPLEX", "PROTEIN FAMILY",
+                        "PROTEIN COMPLEX GROUP", "CHIMERIC PROTEIN"}
+
+
+def _protein_target_ids(target_ids: set[str], timeout: int) -> set[str] | None:
+    """Which of these ChEMBL targets are proteins, in one batched call.
+
+    Returns None if the lookup fails, so that a ChEMBL outage degrades to an
+    unfiltered count rather than to an empty result.
+    """
+    if not target_ids:
+        return set()
+    proteins: set[str] = set()
+    ids = sorted(target_ids)
+    # The API caps the URL length, so batch rather than sending 200 ids at once.
+    for start in range(0, len(ids), 50):
+        chunk = ids[start : start + 50]
+        try:
+            payload = _get(
+                f"{CHEMBL_API}/target.json",
+                {"target_chembl_id__in": ",".join(chunk), "limit": len(chunk)},
+                timeout,
+            )
+        except requests.RequestException:
+            return None
+        for target in (payload or {}).get("targets", []):
+            if target.get("target_type") in PROTEIN_TARGET_TYPES:
+                proteins.add(target.get("target_chembl_id"))
+    return proteins
 
 
 def similar_known_actives(
