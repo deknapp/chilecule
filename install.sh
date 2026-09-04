@@ -87,7 +87,10 @@ info "uv $(uv --version | awk '{print $2}')"
 # --------------------------------------------------------- Python layer
 
 info "creating $VENV_DIR (Python $PYTHON_VERSION)"
-uv venv --python "$PYTHON_VERSION" "$VENV_DIR" >/dev/null
+# --seed installs pip into the venv. uv does not need it, but users reasonably
+# expect `pip install something` to work after activating an environment, and
+# a venv where pip is silently absent is a confusing thing to hand someone.
+uv venv --seed --python "$PYTHON_VERSION" "$VENV_DIR" >/dev/null
 
 EXTRAS=""
 case "$TIER" in
@@ -124,10 +127,20 @@ if [[ "$TIER" != "core" ]]; then
     if ! grep -q "chilecule-bins" "$ACTIVATE" 2>/dev/null; then
         # Put the binaries on PATH whenever the venv is active, so that
         # `source .venv/bin/activate` is the only thing a user has to remember.
+        #
+        # APPENDED, not prepended. The conda-forge environment ships its own
+        # python, and putting its bin directory first shadows the virtualenv's
+        # interpreter -- `python -m pytest` and `pip install` would then run
+        # against the wrong environment while `chilecule` kept working, because
+        # console scripts hard-code their interpreter in the shebang. That is a
+        # miserable bug to diagnose. Appending leaves the venv first for
+        # anything it provides and falls through to conda for smina and
+        # fpocket, which the venv does not provide.
         cat >> "$ACTIVATE" <<EOF
 
-# Added by chilecule install.sh -- docking and pocket-detection binaries
-export PATH="$BIN_PATH:\$PATH"
+# Added by chilecule install.sh -- docking and pocket-detection binaries.
+# Appended so the virtualenv's own python still wins.
+export PATH="\$PATH:$BIN_PATH"
 EOF
     fi
     info "binaries installed to $BIN_PATH"
