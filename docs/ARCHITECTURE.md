@@ -63,6 +63,34 @@ between a tool that informs and one that misleads.
 `-9.2` invites the model to invent a meaning. One returning
 `{"score": -9.2, "units": "kcal/mol", "interpretation": "ranking signal only",
 "control_verdict": "protocol reproduces the crystallographic pose"}` does not.
+All eleven tools publish an output schema, so a client can destructure the
+response instead of re-parsing text.
+
+**Arguments are validated before any work starts.** This is the only place in
+the codebase using pydantic, and the narrowness is deliberate. The scientific
+layer's inputs come from Python a person wrote and a type checker has already
+seen; runtime validation there would buy nothing over the 22 dataclasses
+already in use. The agent boundary is different: arguments arrive from a
+language model, which is exactly the condition that justifies validating them.
+
+Concretely, `exhaustiveness` is `Field(8, ge=1, le=64)` with a description of
+what the parameter costs, `pdb_id` carries a pattern, and `smiles` runs an
+actual RDKit parse — because `"aspirin"` is a syntactically valid string and
+only a parse attempt catches it. A model passing `exhaustiveness=10000` gets a
+correctable error in milliseconds instead of a docking run that never returns,
+and there is a test asserting that path stays under two seconds so the check
+cannot silently move behind the PDB download.
+
+The constraints also travel to the model in the published JSON Schema. Tool
+descriptions and argument schemas are prompt surface; a bare
+`{"type": "integer"}` makes the model guess, and the guess costs a docking run.
+
+What this does not do, and it is worth being clear about: it validates shape,
+range, and parseability. Not one of the real bugs found while building this
+project — the stripped catalytic metal, the matched-pair direction artifact,
+the tie handling that gave a constant scorer a perfect enrichment factor —
+involved malformed data. Types are the cheap layer. Controls and tests are the
+load-bearing one.
 
 ---
 

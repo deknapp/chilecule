@@ -199,6 +199,26 @@ any MCP client — not only inside this project's own agent loop:
 chilecule serve-mcp    # then point any MCP client at it
 ```
 
+All eleven tools are typed on both sides. Inputs are validated before any work
+starts, and the constraints travel to the model in the published schema:
+
+```python
+exhaustiveness: Annotated[int, Field(8, ge=1, le=64, description=
+    "Docking search effort. Runtime scales roughly linearly. 8 is the screening "
+    "default; 16-32 when a single pose matters. Above 32 the returns are "
+    "negligible and the cost is not.")]
+```
+
+A model that passes `exhaustiveness=10000` gets a correctable error in
+milliseconds rather than a docking run that never returns. `smiles` runs an
+actual RDKit parse, because `"aspirin"` is a syntactically valid string and only
+a parse attempt catches it — the error says so, so the model can fix it on the
+next turn.
+
+This is the only place in the codebase that uses pydantic, and the narrowness is
+the point: it is the one boundary where arguments come from a language model
+rather than from a programmer. The scientific layer uses plain dataclasses.
+
 ---
 
 ## Licensing

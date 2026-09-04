@@ -13,16 +13,25 @@ only seen the function signature will confidently report a score of -9.2 as
 "strong predicted binding". Putting the limitation where the model actually
 reads it is the difference between a tool that informs and one that misleads.
 
-**Results are JSON with units and provenance, never bare numbers.** A tool that
-returns ``-9.2`` invites the model to invent an interpretation. One that returns
-``{"score": -9.2, "units": "kcal/mol", "interpretation": "ranking signal
+**Results are typed, with units and provenance, never bare numbers.** A tool
+that returns ``-9.2`` invites the model to invent an interpretation. One that
+returns ``{"score": -9.2, "units": "kcal/mol", "interpretation": "ranking signal
 only", "control_passed": true}`` does not.
+
+**Arguments are validated before any work starts.** Inputs are pydantic-typed
+(see :mod:`chilecule.mcp.models`), so an ``exhaustiveness`` of 10000 or a
+``pdb_id`` of ``"the EGFR structure"`` comes back as a correctable error in
+milliseconds instead of a subprocess that never returns. The constraints also
+travel to the model in the published JSON Schema, which is prompt surface: a
+bare ``{"type": "integer"}`` makes the model guess.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 # The MCP Python SDK renamed FastMCP to MCPServer in 2.0. Support both, since
 # plenty of environments still pin 1.x, and report the two failure modes
@@ -42,6 +51,34 @@ except ImportError:
 from .. import __version__
 from ..tools import alerts as alerts_module
 from ..tools import chem, chembl, pockets, sar, structure
+from .models import (
+    ActivesResult,
+    AlertMatch,
+    AlertsResult,
+    ChainId,
+    ChemblId,
+    ComparisonResult,
+    DockingToolResult,
+    EfficiencyResult,
+    ErrorResult,
+    Exhaustiveness,
+    LigandModel,
+    MaxRecords,
+    PdbId,
+    PocketModel,
+    PocketsResult,
+    PotencyNanomolar,
+    PropertiesResult,
+    RedockControl,
+    Smiles,
+    StandardizationResult,
+    StructureHitModel,
+    StructureInspection,
+    StructureSearchResult,
+    TargetHit,
+    TargetSearchResult,
+    TopN,
+)
 
 mcp = _Server(
     "chilecule",
@@ -71,7 +108,7 @@ def _json(payload: Any) -> str:
 
 
 @mcp.tool()
-def standardize_molecule(smiles: str) -> str:
+def standardize_molecule(smiles: Smiles) -> StandardizationResult:
     """Normalize a molecule to a canonical form: strip salts and solvates, neutralize
     charges, and canonicalize the tautomer.
 
@@ -82,19 +119,17 @@ def standardize_molecule(smiles: str) -> str:
     built on structural identity.
     """
     result = chem.standardize(smiles)
-    return _json(
-        {
-            "input": result.input_smiles,
-            "standardized_smiles": result.smiles,
-            "inchikey": result.inchikey,
-            "changed": result.changed,
-            "error": result.error,
-        }
+    return StandardizationResult(
+        input_smiles=result.input_smiles,
+        standardized_smiles=result.smiles,
+        inchikey=result.inchikey,
+        changed=result.changed,
+        error=result.error,
     )
 
 
 @mcp.tool()
-def molecule_properties(smiles: str) -> str:
+def molecule_properties(smiles: Smiles) -> PropertiesResult:
     """Compute physicochemical descriptors: MW, cLogP, TPSA, HBD/HBA, rotatable bonds,
     aromatic rings, fraction sp3, QED, Lipinski violations, and Veber pass.
 
@@ -103,13 +138,11 @@ def molecule_properties(smiles: str) -> str:
     a filter -- report them, do not enforce them.
     """
     props = chem.properties(smiles)
-    if props is None:
-        return _json({"error": "could not parse SMILES", "input": smiles})
-    return _json(props.to_dict())
+    return PropertiesResult(**props.to_dict())
 
 
 @mcp.tool()
-def structural_alerts(smiles: str) -> str:
+def structural_alerts(smiles: Smiles) -> AlertsResult:
     """Screen a molecule against PAINS (A/B/C), Brenk, NIH, and ZINC alert catalogs.
 
     Returns every match with its catalog, severity, and literature reference.
@@ -120,13 +153,24 @@ def structural_alerts(smiles: str) -> str:
     a compound on an alert, say which catalog fired and why.
     """
     report = alerts_module.screen(smiles)
-    if report is None:
-        return _json({"error": "could not parse SMILES", "input": smiles})
-    return _json(report.to_dict())
+    return AlertsResult(
+        smiles=report.smiles,
+        clean=report.clean,
+        max_severity=report.max_severity,
+        alerts=[
+            AlertMatch(
+                catalog=alert.catalog,
+                description=alert.description,
+                severity=alert.severity,
+                reference=alert.reference,
+            )
+            for alert in report.alerts
+        ],
+    )
 
 
 @mcp.tool()
-def ligand_efficiency_metrics(smiles: str, potency_nm: float) -> str:
+def ligand_efficiency_metrics(smiles: Smiles, potency_nm: PotencyNanomolar) -> EfficiencyResult:
     """Compute ligand efficiency (LE) and lipophilic efficiency (LLE) for a compound
     at a measured potency in nanomolar.
 
@@ -137,34 +181,25 @@ def ligand_efficiency_metrics(smiles: str, potency_nm: float) -> str:
     inefficient large molecule.
     """
     props = chem.properties(smiles)
-    if props is None:
-        return _json({"error": "could not parse SMILES", "input": smiles})
-    return _json(
-        {
-            "smiles": props.smiles,
-            "potency_nm": potency_nm,
-            "heavy_atoms": props.heavy_atoms,
-            "clogp": props.clogp,
-            "ligand_efficiency": chem.ligand_efficiency(potency_nm, props.heavy_atoms),
-            "ligand_efficiency_units": "kcal/mol per heavy atom",
-            "lipophilic_efficiency": chem.lipophilic_efficiency(potency_nm, props.clogp),
-            "guidance": "LE above 0.3 is a workable starting point; LLE above 5 is healthy.",
-        }
+    return EfficiencyResult(
+        smiles=props.smiles,
+        potency_nm=potency_nm,
+        heavy_atoms=props.heavy_atoms,
+        clogp=props.clogp,
+        ligand_efficiency=chem.ligand_efficiency(potency_nm, props.heavy_atoms),
+        lipophilic_efficiency=chem.lipophilic_efficiency(potency_nm, props.clogp),
     )
 
 
 @mcp.tool()
-def compare_molecules(smiles_a: str, smiles_b: str) -> str:
+def compare_molecules(smiles_a: Smiles, smiles_b: Smiles) -> ComparisonResult:
     """Tanimoto similarity on ECFP4 fingerprints between two molecules, with their
     Bemis-Murcko scaffolds.
     """
-    return _json(
-        {
-            "similarity": sar.similarity(smiles_a, smiles_b),
-            "fingerprint": "ECFP4 (Morgan radius 2, 2048 bits)",
-            "scaffold_a": sar.murcko_scaffold(smiles_a),
-            "scaffold_b": sar.murcko_scaffold(smiles_b),
-        }
+    return ComparisonResult(
+        similarity=sar.similarity(smiles_a, smiles_b),
+        scaffold_a=sar.murcko_scaffold(smiles_a),
+        scaffold_b=sar.murcko_scaffold(smiles_b),
     )
 
 
@@ -172,7 +207,7 @@ def compare_molecules(smiles_a: str, smiles_b: str) -> str:
 
 
 @mcp.tool()
-def find_chembl_target(query: str) -> str:
+def find_chembl_target(query: str) -> TargetSearchResult | ErrorResult:
     """Resolve a gene symbol, protein name, or UniProt accession to ChEMBL targets.
 
     Single-protein human targets are returned first. ChEMBL also stores protein
@@ -181,12 +216,29 @@ def find_chembl_target(query: str) -> str:
     """
     frame = _client().find_targets(query)
     if frame.empty:
-        return _json({"error": f"no ChEMBL target matched {query!r}", "results": []})
-    return _json({"results": frame.head(10).to_dict(orient="records")})
+        return ErrorResult(
+            error=f"no ChEMBL target matched {query!r}",
+            suggestion="Try an official gene symbol (EGFR), or a UniProt accession (P00533).",
+        )
+    return TargetSearchResult(
+        results=[
+            TargetHit(
+                target_chembl_id=row.get("target_chembl_id"),
+                pref_name=row.get("pref_name"),
+                target_type=row.get("target_type"),
+                organism=row.get("organism"),
+                uniprot=row.get("uniprot"),
+                n_components=row.get("n_components"),
+            )
+            for row in frame.head(10).to_dict(orient="records")
+        ]
+    )
 
 
 @mcp.tool()
-def get_target_actives(target_chembl_id: str, max_records: int = 3000) -> str:
+def get_target_actives(
+    target_chembl_id: ChemblId, max_records: MaxRecords = 3000
+) -> ActivesResult | ErrorResult:
     """Fetch and curate bioactivity data for a ChEMBL target.
 
     Returns one row per compound with median potency on the pChEMBL scale, plus
@@ -202,19 +254,19 @@ def get_target_actives(target_chembl_id: str, max_records: int = 3000) -> str:
     release = client.release()
     raw = client.fetch_activities(target_chembl_id, max_records=max_records)
     if raw.empty:
-        return _json({"error": f"no activity records for {target_chembl_id}"})
+        return ErrorResult(
+            error=f"no activity records for {target_chembl_id}",
+            suggestion="Confirm the identifier with find_chembl_target.",
+        )
 
     curated, report = chembl.curate_activities(
         raw, target_chembl_id=target_chembl_id, chembl_release=release
     )
     inactives = chembl.censored_inactives(raw)
-    return _json(
-        {
-            "curation": report.to_dict(),
-            "n_confirmed_inactives": len(inactives),
-            "compounds": curated.head(100).to_dict(orient="records"),
-            "license": "ChEMBL data is CC BY-SA 3.0; cite the release shown in curation.",
-        }
+    return ActivesResult(
+        curation=report.to_dict(),
+        n_confirmed_inactives=len(inactives),
+        compounds=curated.head(100).to_dict(orient="records"),
     )
 
 
@@ -222,7 +274,7 @@ def get_target_actives(target_chembl_id: str, max_records: int = 3000) -> str:
 
 
 @mcp.tool()
-def find_structures(uniprot_accession: str, top: int = 10) -> str:
+def find_structures(uniprot_accession: str, top: TopN = 10) -> StructureSearchResult | ErrorResult:
     """Find and rank PDB structures for a UniProt accession by suitability for docking.
 
     Ranks on resolution first, method second, sequence coverage last. A 1.9 A
@@ -233,12 +285,20 @@ def find_structures(uniprot_accession: str, top: int = 10) -> str:
     """
     hits = structure.rank_structures(structure.structures_for_uniprot(uniprot_accession))
     if not hits:
-        return _json({"error": f"no structures found for {uniprot_accession}", "results": []})
-    return _json({"results": [h.to_dict() for h in hits[:top]]})
+        return ErrorResult(
+            error=f"no experimental structures found for {uniprot_accession}",
+            suggestion=(
+                "Confirm the accession is a UniProt ID such as P00533. Without a "
+                "structure, only ligand-based workflows apply to this target."
+            ),
+        )
+    return StructureSearchResult(
+        results=[StructureHitModel(**h.to_dict()) for h in hits[:top]]
+    )
 
 
 @mcp.tool()
-def inspect_structure(pdb_id: str) -> str:
+def inspect_structure(pdb_id: PdbId) -> StructureInspection:
     """Download a PDB entry and list its bound ligands, cofactors, and metals.
 
     Categories matter for receptor preparation: crystallization additives should
@@ -249,19 +309,17 @@ def inspect_structure(pdb_id: str) -> str:
     """
     path = structure.fetch_pdb(pdb_id)
     ligands = structure.extract_ligands(path)
-    return _json(
-        {
-            "pdb_id": pdb_id.upper(),
-            "path": str(path),
-            "ligands": [lig.to_dict() for lig in ligands[:25]],
-            "note": "Categories: 'ligand' defines a docking site; 'metal' and 'cofactor' "
-                    "are retained during receptor preparation; 'additive' is removed.",
-        }
+    return StructureInspection(
+        pdb_id=pdb_id.upper(),
+        path=str(path),
+        ligands=[LigandModel(**lig.to_dict()) for lig in ligands[:25]],
     )
 
 
 @mcp.tool()
-def detect_pockets(pdb_id: str, chain: str | None = None, top: int = 5) -> str:
+def detect_pockets(
+    pdb_id: PdbId, chain: ChainId = None, top: TopN = 5
+) -> PocketsResult | ErrorResult:
     """Detect candidate binding sites with fpocket, ranked by druggability.
 
     Use this only when there is no co-crystallized ligand. A pocket defined by
@@ -275,17 +333,33 @@ def detect_pockets(pdb_id: str, chain: str | None = None, top: int = 5) -> str:
     try:
         found = pockets.find_pockets(receptor, max_pockets=top)
     except pockets.FpocketUnavailable as exc:
-        return _json({"error": str(exc)})
-    return _json({"pdb_id": pdb_id.upper(), "pockets": [p.to_dict() for p in found]})
+        return ErrorResult(
+            error=str(exc),
+            suggestion="micromamba install -c conda-forge fpocket",
+        )
+    return PocketsResult(
+        pdb_id=pdb_id.upper(),
+        pockets=[PocketModel(**p.to_dict()) for p in found],
+    )
 
 
 @mcp.tool()
 def dock_molecule(
-    smiles: str,
-    pdb_id: str,
-    exhaustiveness: int = 8,
-    run_control: bool = True,
-) -> str:
+    smiles: Smiles,
+    pdb_id: PdbId,
+    exhaustiveness: Exhaustiveness = 8,
+    run_control: Annotated[
+        bool,
+        Field(
+            default=True,
+            description=(
+                "Re-dock the crystallographic ligand first and report RMSD to its known "
+                "pose. Leave on: without it there is no evidence the protocol works for "
+                "this site. Costs one extra docking run."
+            ),
+        ),
+    ] = True,
+) -> DockingToolResult | ErrorResult:
     """Dock a molecule into a PDB structure's co-crystallized ligand site.
 
     IMPORTANT -- how to report the result. A docking score is NOT a predicted
@@ -305,17 +379,17 @@ def dock_molecule(
 
     program = docking_module.find_program()
     if program is None:
-        return _json(
-            {"error": "no docking program on PATH",
-             "fix": "micromamba install -c conda-forge smina"}
+        return ErrorResult(
+            error="no docking program on PATH",
+            suggestion="micromamba install -c conda-forge smina",
         )
 
     path = structure.fetch_pdb(pdb_id)
     ligands = [lig for lig in structure.extract_ligands(path) if lig.category == "ligand"]
     if not ligands:
-        return _json(
-            {"error": f"{pdb_id} has no co-crystallized ligand to define a site",
-             "suggestion": "call detect_pockets and dock into a predicted pocket instead"}
+        return ErrorResult(
+            error=f"{pdb_id.upper()} has no co-crystallized ligand to define a site",
+            suggestion="Call detect_pockets and dock into a predicted pocket instead.",
         )
 
     native = ligands[0]
@@ -337,33 +411,29 @@ def dock_molecule(
             control = docking_module.redock_control(
                 receptor, native_sdf, box, program=program, exhaustiveness=16
             )
-            control_payload = control.to_dict()
+            control_payload = RedockControl(**control.to_dict())
 
     result = docking_module.dock(
         receptor, smiles, box, program=program, exhaustiveness=exhaustiveness
     )
-    return _json(
-        {
-            "smiles": smiles,
-            "pdb_id": pdb_id.upper(),
-            "site": box.to_dict(),
-            "program": result.program,
-            "best_score": result.best_score,
-            "score_units": "kcal/mol (more negative is a better-scoring pose)",
-            "interpretation": (
-                "Ranking signal only. Not a predicted binding affinity. Do not convert "
-                "this number to a Kd or compare it across different targets."
-            ),
-            "n_poses": len(result.poses),
-            "redocking_control": control_payload,
-            "control_verdict": (
-                None if control_payload is None
-                else ("protocol reproduces the crystallographic pose"
-                      if control_payload["passed"]
-                      else "PROTOCOL FAILED ITS CONTROL -- do not rely on this score")
-            ),
-            "error": result.error,
-        }
+    return DockingToolResult(
+        smiles=smiles,
+        pdb_id=pdb_id.upper(),
+        site=box.to_dict(),
+        program=result.program,
+        best_score=result.best_score,
+        n_poses=len(result.poses),
+        redocking_control=control_payload,
+        control_verdict=(
+            None
+            if control_payload is None
+            else (
+                "protocol reproduces the crystallographic pose"
+                if control_payload.passed
+                else "PROTOCOL FAILED ITS CONTROL -- do not rely on this score"
+            )
+        ),
+        error=result.error,
     )
 
 

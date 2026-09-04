@@ -96,6 +96,36 @@ def test_every_tool_has_a_description_and_schema(probe):
         assert tool.get("inputSchema", {}).get("properties")
 
 
+def test_every_tool_publishes_an_output_schema(probe):
+    """An output schema lets a client validate and destructure the response
+    instead of parsing whatever text came back."""
+    for tool in probe.request("tools/list")["result"]["tools"]:
+        schema = tool.get("outputSchema")
+        assert schema, f"{tool['name']} publishes no output schema"
+        assert schema.get("properties")
+
+
+def test_argument_schemas_carry_descriptions_and_bounds(probe):
+    """Argument schemas are prompt surface.
+
+    A bare {"type": "integer"} tells the model nothing about what a sane value
+    is, so it guesses -- and the guess costs a docking run.
+    """
+    tools = {t["name"]: t for t in probe.request("tools/list")["result"]["tools"]}
+
+    smiles = tools["molecule_properties"]["inputSchema"]["properties"]["smiles"]
+    assert "description" in smiles
+    assert smiles.get("examples"), "an example SMILES saves the model a failed call"
+
+    effort = tools["dock_molecule"]["inputSchema"]["properties"]["exhaustiveness"]
+    assert effort["minimum"] == 1
+    assert effort["maximum"] == 64
+    assert "description" in effort
+
+    pdb = tools["inspect_structure"]["inputSchema"]["properties"]["pdb_id"]
+    assert pdb.get("pattern"), "an unconstrained pdb_id accepts prose"
+
+
 def test_docking_tool_states_the_score_caveat(probe):
     """The caveat has to be where the model reads it, not only in our docs."""
     tools = {t["name"]: t for t in probe.request("tools/list")["result"]["tools"]}
@@ -114,16 +144,74 @@ def test_tool_call_returns_structured_json(probe):
     assert payload["heavy_atoms"] == 13
 
 
-def test_tool_errors_are_returned_as_data_not_crashes(probe):
-    """An unparseable SMILES must not take the server down."""
+def test_invalid_input_is_rejected_at_the_boundary(probe):
+    """An unparseable SMILES is refused before any work happens, with a message
+    the model can correct from -- and the server survives."""
     response = probe.request("tools/call", {
         "name": "molecule_properties",
         "arguments": {"smiles": "definitely not a molecule"},
     })
-    payload = json.loads(response["result"]["content"][0]["text"])
-    assert "error" in payload
+    assert response["result"]["isError"] is True
+    message = response["result"]["content"][0]["text"]
+    assert "not a valid SMILES" in message
+    # The message must name the likely mistake, not just say "invalid".
+    assert "compound name" in message
     # The server is still alive afterwards.
     assert probe.request("tools/list")["result"]["tools"]
+
+
+def test_out_of_range_effort_is_refused_without_running_anything(probe):
+    """REGRESSION GUARD: exhaustiveness is unbounded in a naive schema.
+
+    A model passing 10000 would previously have launched a docking run that
+    does not finish in a day. Validation turns that into a millisecond error.
+    """
+    import time
+
+    start = time.monotonic()
+    response = probe.request("tools/call", {
+        "name": "dock_molecule",
+        "arguments": {"smiles": "CCO", "pdb_id": "5CNN", "exhaustiveness": 10000},
+    })
+    elapsed = time.monotonic() - start
+
+    assert response["result"]["isError"] is True
+    assert "less than or equal to 64" in response["result"]["content"][0]["text"]
+    # No PDB download, no subprocess. If this ever takes seconds, the check moved.
+    assert elapsed < 2.0, f"validation should be instant, took {elapsed:.1f}s"
+
+
+def test_prose_where_an_identifier_belongs_is_refused(probe):
+    response = probe.request("tools/call", {
+        "name": "inspect_structure",
+        "arguments": {"pdb_id": "the EGFR structure"},
+    })
+    assert response["result"]["isError"] is True
+    assert "pattern" in response["result"]["content"][0]["text"]
+
+
+def test_nonsensical_potency_is_refused(probe):
+    """A negative IC50 is not a measurement, and -log10 of it is not a number."""
+    response = probe.request("tools/call", {
+        "name": "ligand_efficiency_metrics",
+        "arguments": {"smiles": "CCO", "potency_nm": -5},
+    })
+    assert response["result"]["isError"] is True
+    assert "greater than 0" in response["result"]["content"][0]["text"]
+
+
+def test_valid_calls_return_structured_content(probe):
+    """With an output schema declared, responses carry structured content that a
+    client can use without re-parsing text."""
+    response = probe.request("tools/call", {
+        "name": "ligand_efficiency_metrics",
+        "arguments": {"smiles": "CC(=O)Oc1ccccc1C(=O)O", "potency_nm": 50.0},
+    })
+    assert not response["result"].get("isError")
+    structured = response["result"].get("structuredContent")
+    assert structured is not None
+    assert structured["heavy_atoms"] == 13
+    assert structured["ligand_efficiency"] == pytest.approx(0.771, abs=0.01)
 
 
 def test_standardization_tool_round_trips_a_salt(probe):
