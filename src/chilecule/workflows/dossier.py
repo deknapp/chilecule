@@ -17,8 +17,8 @@ import re
 import pandas as pd
 import requests
 
-from ..tools.chembl import ChemblClient, censored_inactives, curate_activities
 from ..tools.chem import properties
+from ..tools.chembl import ChemblClient, censored_inactives, curate_activities
 from ..tools.sar import scaffold_summary
 from ..tools.structure import rank_structures, structures_for_uniprot
 from .report import Report, Section, base_provenance
@@ -80,7 +80,10 @@ def _verify_match(results: list[dict], query: str) -> dict | None:
 
 # A UniProt accession: one letter, then a defined alternation of digits and
 # letters. Matching this first avoids treating "P00533" as a gene symbol.
-ACCESSION_PATTERN = re.compile(r"^[OPQ][0-9][A-Z0-9]{3}[0-9]$|^[A-NR-Z][0-9]([A-Z][A-Z0-9]{2}[0-9]){1,2}$")
+ACCESSION_PATTERN = re.compile(
+    r"^[OPQ][0-9][A-Z0-9]{3}[0-9]$"
+    r"|^[A-NR-Z][0-9]([A-Z][A-Z0-9]{2}[0-9]){1,2}$"
+)
 
 UNIPROT_FIELDS = (
     "accession,id,protein_name,gene_names,length,cc_function,ft_domain,cc_subcellular_location"

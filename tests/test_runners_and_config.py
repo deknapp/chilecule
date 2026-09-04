@@ -93,5 +93,7 @@ def test_detect_never_reads_credential_values(monkeypatch):
 
 
 def test_profile_is_immutable():
-    with pytest.raises(Exception):
+    import dataclasses
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
         ResourceProfile(cpus=1).cpus = 4  # type: ignore[misc]

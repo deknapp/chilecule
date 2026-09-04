@@ -75,8 +75,10 @@ def test_matched_pairs_are_invariant_to_row_order(halogen_series):
     reversed_frame = halogen_series.iloc[::-1].reset_index(drop=True)
     backward = transformation_summary(matched_pairs(reversed_frame), min_occurrences=1)
 
-    forward_map = dict(zip(forward["transformation"], forward["median_delta"]))
-    backward_map = dict(zip(backward["transformation"], backward["median_delta"]))
+    forward_map = dict(zip(forward["transformation"], forward["median_delta"], strict=True))
+    backward_map = dict(
+        zip(backward["transformation"], backward["median_delta"], strict=True)
+    )
     assert set(forward_map) == set(backward_map)
     for key, value in forward_map.items():
         assert backward_map[key] == pytest.approx(value)

@@ -22,7 +22,6 @@ from typing import Any
 
 import pandas as pd
 
-
 # Column width caps for rendered tables. SMILES strings routinely exceed 100
 # characters and turn a readable table into an unreadable one; the full values
 # are always present in the JSON output, which is what an agent consumes.

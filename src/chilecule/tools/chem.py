@@ -168,7 +168,11 @@ def properties(smiles: str) -> Properties | None:
         heavy_atoms=mol.GetNumHeavyAtoms(),
         fraction_csp3=round(rdMolDescriptors.CalcFractionCSP3(mol), 3),
         formal_charge=Chem.GetFormalCharge(mol),
-        stereocenters=len(Chem.FindMolChiralCenters(mol, includeUnassigned=True, useLegacyImplementation=False)),
+        stereocenters=len(
+            Chem.FindMolChiralCenters(
+                mol, includeUnassigned=True, useLegacyImplementation=False
+            )
+        ),
         qed=round(QED.qed(mol), 3),
         rule_of_five_violations=ro5,
         veber_pass=veber,

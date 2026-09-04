@@ -39,11 +39,13 @@ except ImportError:
             "pip install 'chilecule[mcp]'"
         ) from exc
 
+from .. import __version__
 from ..tools import alerts as alerts_module
 from ..tools import chem, chembl, pockets, sar, structure
 
 mcp = _Server(
     "chilecule",
+    version=__version__,
     instructions=(
         "Open-source drug discovery tools. Standardize structures before comparing or "
         "deduplicating them. Docking scores rank, they do not predict potency. Never "

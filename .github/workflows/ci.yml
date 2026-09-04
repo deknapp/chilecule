@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Weekly, because the integration tests exist to catch upstream changes --
+  # ChEMBL renaming a field or PDBe changing a response shape breaks this
+  # project without anyone touching this repository.
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  test:
+    name: Offline tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install
+        run: uv pip install --system -e ".[mcp,dev]"
+      - name: Lint
+        run: ruff check src tests
+      - name: Test
+        run: pytest -q -m "not network and not binary" --cov=chilecule --cov-report=term-missing
+
+  integration:
+    name: Integration (live services + docking binaries)
+    runs-on: ubuntu-latest
+    # Only on main and the weekly run: these hit EBI and RCSB, and hammering
+    # public infrastructure from every pull request is bad manners.
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: bins
+          create-args: >-
+            smina
+            fpocket
+          condarc: |
+            channels:
+              - conda-forge
+      - name: Install
+        run: uv pip install --system -e ".[mcp,dev]"
+      - name: Run full suite
+        shell: bash -el {0}
+        run: pytest -q --durations=10
+
+  licenses:
+    name: Dependency licence audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install
+        run: |
+          uv pip install --system -e ".[mcp]"
+          uv pip install --system pip-licenses
+      - name: Fail on any copyleft library in the import graph
+        run: |
+          pip-licenses --format=csv --with-system > licenses.csv
+          cat licenses.csv
+          # The core must never import a GPL or LGPL library. External docking
+          # programs are invoked as subprocesses and are not in this graph;
+          # see docs/LICENSING.md for why that boundary is the load-bearing one.
+          if grep -Ei '(^|,)"?(GNU General Public|GPL|LGPL|AGPL)' licenses.csv \
+             | grep -vi 'lgpl-compatible'; then
+            echo "::error::A copyleft-licensed library entered the import graph."
+            exit 1
+          fi
+          echo "No copyleft libraries in the import graph."

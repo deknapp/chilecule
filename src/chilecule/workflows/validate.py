@@ -25,12 +25,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from ..bench.decoys import decoy_bias_report, property_matched_decoys
+from ..bench.decoys import decoy_bias_report
 from ..bench.metrics import evaluate, max_enrichment_factor
-from ..tools.chem import properties
+from ..tools.chem import parse_smiles, properties
 from ..tools.chembl import ChemblClient, censored_inactives, curate_activities
 from ..tools.sar import fingerprint
-from ..tools.chem import parse_smiles
 from .report import Report, Section, base_provenance
 
 ACTIVE_THRESHOLD = 7.0  # pChEMBL >= 7 is 100 nM or better
@@ -48,7 +47,9 @@ def similarity_to_actives(query_smiles: str, reference_smiles: list[str]) -> flo
     query = parse_smiles(query_smiles)
     if query is None:
         return 0.0
-    references = [fingerprint(m) for m in (parse_smiles(s) for s in reference_smiles) if m is not None]
+    references = [
+        fingerprint(m) for m in (parse_smiles(s) for s in reference_smiles) if m is not None
+    ]
     if not references:
         return 0.0
     return max(DataStructs.BulkTanimotoSimilarity(fingerprint(query), references))
@@ -214,7 +215,9 @@ def build(
             "ROC_AUC": "1.000",
             "BEDROC_a20": "1.000",
             **{
-                f"EF_{int(f * 100)}%": f"{max_enrichment_factor(n_evaluated, n_actives_per_replicate, f):.3f}"
+                f"EF_{int(f * 100)}%": (
+                    f"{max_enrichment_factor(n_evaluated, n_actives_per_replicate, f):.3f}"
+                )
                 for f in (0.01, 0.05, 0.10)
             },
         }

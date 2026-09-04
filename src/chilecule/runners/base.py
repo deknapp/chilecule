@@ -18,9 +18,10 @@ involve.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from concurrent.futures import Future
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Protocol, TypeVar
+from typing import Any, Protocol, TypeVar
 
 T = TypeVar("T")
 R = TypeVar("R")

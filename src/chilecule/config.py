@@ -64,7 +64,8 @@ class Environment:
         """Which workflow tiers can actually run."""
         has_rdkit = self.packages.get("rdkit", Capability("rdkit", False, "")).available
         has_docking = any(
-            self.binaries.get(b, Capability(b, False, "")).available for b in ("smina", "vina", "gnina")
+            self.binaries.get(b, Capability(b, False, "")).available
+            for b in ("smina", "vina", "gnina")
         )
         return {
             "data-and-sar": has_rdkit,
@@ -142,7 +143,9 @@ def detect() -> Environment:
         binaries[binary] = Capability(
             name=binary,
             available=path is not None,
-            detail=f"{path}  --  {description}" if path else f"not on PATH  --  {description}",
+            detail=(
+                f"{path}  --  {description}" if path else f"not on PATH  --  {description}"
+            ),
             how_to_enable=f"micromamba install -c conda-forge {binary}",
         )
 

@@ -101,7 +101,7 @@ def build(
     # ------------------------------------------------- Stage 1: structures
     standardized = runner.map(standardize, smiles_in, DESCRIPTOR)
     survivors = []
-    for original, result in zip(smiles_in, standardized):
+    for original, result in zip(smiles_in, standardized, strict=True):
         if result.ok:
             survivors.append(result.smiles)
         else:
@@ -143,7 +143,11 @@ def build(
             continue
         alert_notes[smiles] = alerts
         if alerts.max_severity in alert_severities_to_drop:
-            worst = "; ".join(a.description for a in alerts.alerts if a.severity in alert_severities_to_drop)
+            worst = "; ".join(
+                a.description
+                for a in alerts.alerts
+                if a.severity in alert_severities_to_drop
+            )
             rejections.append({"smiles": smiles, "stage": "structural alert",
                                "reason": f"{alerts.max_severity} severity: {worst}"})
             continue
@@ -196,7 +200,10 @@ def build(
         if receptor is not None and resolved_box is not None:
             shortlist = stage3[:dock_top_n]
             projection = estimate_cost(len(shortlist), DOCKING_POSE)
-            log.info("docking %d compounds (~%s CPU-hours)", len(shortlist), projection["cpu_hours"])
+            log.info(
+                "docking %d compounds (~%s CPU-hours)",
+                len(shortlist), projection["cpu_hours"],
+            )
 
             for smiles in shortlist:
                 try:
@@ -274,7 +281,8 @@ def build(
                     f"{len(rejections)} exclusions, by stage:\n\n"
                     + "\n".join(
                         f"- **{stage}**: {count}"
-                        for stage, count in rejection_frame["stage"].value_counts().items()
+                        for stage, count in
+                        rejection_frame["stage"].value_counts().items()
                     )
                     + "\n\nThe full list with per-compound reasons is in the JSON output."
                 ),

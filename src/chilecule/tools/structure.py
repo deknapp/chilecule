@@ -49,7 +49,10 @@ CATALYTIC_METALS = {"MG", "ZN", "MN", "FE", "CA", "CD", "NI", "CU", "CO", "HG", 
 
 # Cofactors: real biology, but not the ligand you dock against unless the
 # target is the cofactor site itself. Flagged separately rather than discarded.
-COMMON_COFACTORS = {"ATP", "ADP", "AMP", "GTP", "GDP", "NAD", "NAP", "NDP", "FAD", "FMN", "SAM", "SAH", "HEM"}
+COMMON_COFACTORS = {
+    "ATP", "ADP", "AMP", "GTP", "GDP", "NAD", "NAP", "NDP",
+    "FAD", "FMN", "SAM", "SAH", "HEM",
+}
 
 
 @dataclass
@@ -377,7 +380,7 @@ RCSB_LIGANDS = "https://files.rcsb.org/ligands/download"
 
 def extract_ligand_mol(
     pdb_path: Path | str, ligand: Ligand, timeout: int = 30
-) -> "object | None":
+) -> object | None:
     """Extract a co-crystallized ligand as a chemically correct RDKit molecule.
 
     PDB files store coordinates and element types but no bond orders. Reading

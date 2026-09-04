@@ -167,7 +167,9 @@ class BiasReport:
             "property_only_auc": round(self.auc, 3),
             "n_actives": self.n_actives,
             "n_decoys": self.n_decoys,
-            "top_features": [{"feature": f, "importance": round(v, 3)} for f, v in self.top_features],
+            "top_features": [
+                {"feature": f, "importance": round(v, 3)} for f, v in self.top_features
+            ],
             "verdict": self.verdict,
             "detail": self.detail,
         }
@@ -252,7 +254,9 @@ def decoy_bias_report(
 
     auc = float(np.mean(aucs))
     mean_importance = np.mean(importances, axis=0)
-    ranked = sorted(zip(feature_cols, mean_importance), key=lambda kv: -kv[1])
+    ranked = sorted(
+        zip(feature_cols, mean_importance, strict=True), key=lambda kv: -kv[1]
+    )
 
     if auc < 0.60:
         verdict, detail = "PASS", (

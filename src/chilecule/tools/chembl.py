@@ -32,9 +32,10 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import pandas as pd
 import requests
@@ -132,7 +133,11 @@ class ChemblClient:
         max_retries: int = 3,
         session: requests.Session | None = None,
     ) -> None:
-        self.cache_dir = Path(cache_dir) if cache_dir else Path.home() / ".cache" / "chilecule" / "chembl"
+        self.cache_dir = (
+            Path(cache_dir)
+            if cache_dir
+            else Path.home() / ".cache" / "chilecule" / "chembl"
+        )
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.timeout = timeout
         self.max_retries = max_retries

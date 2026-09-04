@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -108,8 +107,10 @@ def sar(
 
 @app.command()
 def triage(
-    smiles_file: Path = typer.Argument(..., help="File with one SMILES per line, or a CSV with a 'smiles' column."),
-    pdb: Optional[str] = typer.Option(None, help="PDB ID defining the binding site, e.g. 5CNN."),
+    smiles_file: Path = typer.Argument(
+        ..., help="File with one SMILES per line, or a CSV with a 'smiles' column."
+    ),
+    pdb: str | None = typer.Option(None, help="PDB ID defining the binding site, e.g. 5CNN."),
     dock_top: int = typer.Option(25, help="How many survivors to dock."),
     exhaustiveness: int = typer.Option(8, help="Docking search effort."),
     out: Path = typer.Option(DEFAULT_OUTPUT),
@@ -161,7 +162,7 @@ def validate(
 @app.command()
 def pockets(
     pdb: str = typer.Argument(..., help="PDB ID, e.g. 5CNN."),
-    chain: Optional[str] = typer.Option(None, help="Restrict to one chain."),
+    chain: str | None = typer.Option(None, help="Restrict to one chain."),
     top: int = typer.Option(5, help="How many pockets to report."),
 ) -> None:
     """Detect and rank candidate binding sites in a structure."""
