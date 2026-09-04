@@ -96,6 +96,7 @@ CHILECULE_TOOLS = [
     "mcp__chilecule__score_compound",
     "mcp__chilecule__profile_compound",
     "mcp__chilecule__design_analogs",
+    "mcp__chilecule__check_liabilities",
 ]
 
 

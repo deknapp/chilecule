@@ -527,3 +527,24 @@ class AnalogDesignResult(ToolResult):
         "potency by the stated amount in the contexts where it was observed; whether it "
         "does so on this parent is what the experiment is for."
     )
+
+
+class LiabilityModel(ToolResult):
+    category: str
+    severity: Literal["high", "medium", "low"]
+    finding: str
+    rationale: str
+    suggested_assay: str
+
+
+class LiabilitiesResult(ToolResult):
+    smiles: str
+    n_flags: int
+    highest_severity: Literal["high", "medium", "low"] | None
+    summary: str
+    liabilities: list[LiabilityModel] = Field(default_factory=list)
+    caveat: str = (
+        "Structural risk flags, not predictions. Each names a feature and the reason it "
+        "matters; none is a measurement. The response to a flag is an assay, not a "
+        "deletion -- many marketed drugs carry several."
+    )

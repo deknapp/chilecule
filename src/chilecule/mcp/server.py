@@ -50,7 +50,7 @@ except ImportError:
 
 from .. import __version__
 from ..tools import alerts as alerts_module
-from ..tools import chem, chembl, lookup, pockets, sar, structure, synth
+from ..tools import chem, chembl, liabilities, lookup, pockets, sar, structure, synth
 from ..tools import score as score_module
 from .models import (
     ActivesResult,
@@ -65,6 +65,8 @@ from .models import (
     EfficiencyResult,
     ErrorResult,
     Exhaustiveness,
+    LiabilitiesResult,
+    LiabilityModel,
     LigandModel,
     MaxRecords,
     NeighbourModel,
@@ -684,6 +686,32 @@ def design_analogs(
         transformations=[TransformationModel(**t.to_dict()) for t in transformations[:12]],
         analogs=analogs,
     )
+
+
+@mcp.tool()
+def check_liabilities(smiles: Smiles) -> LiabilitiesResult | ErrorResult:
+    """Developability liabilities visible from structure: hERG, phospholipidosis,
+    solubility, permeability, metabolic soft spots and reactive-metabolite precursors.
+
+    Each flag names a structural feature and why it matters -- "basic amine with cLogP
+    4.8 and two aromatic rings is the canonical hERG pharmacophore" -- together with the
+    assay that would settle it.
+
+    Report these as risks to test, never as predictions, and never recommend deleting a
+    compound on a flag alone. Plenty of marketed drugs carry several: chloroquine is
+    both a hERG risk and a classic cationic amphiphile. The useful output is which assay
+    to run, not a verdict.
+
+    Complements structural_alerts, which covers assay-interference and reactive-group
+    catalogs. This covers ADMET and safety pharmacology.
+    """
+    report = liabilities.screen(smiles)
+    if report is None:
+        return ErrorResult(error="could not parse SMILES")
+    payload = report.to_dict()
+    payload.pop("caveat", None)
+    payload["liabilities"] = [LiabilityModel(**item) for item in payload["liabilities"]]
+    return LiabilitiesResult(**payload)
 
 
 # The entrypoint stays at the very bottom of this module, deliberately.

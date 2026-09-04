@@ -14,7 +14,7 @@ import pandas as pd
 
 from ..parallel import pmap
 from ..tools import alerts as alerts_module
-from ..tools import lookup, score, synth
+from ..tools import liabilities, lookup, score, synth
 from ..tools.chem import properties, standardize
 from .report import Report, Section, base_provenance
 
@@ -30,6 +30,7 @@ def profile_one(smiles: str, *, check_databases: bool = True, profile: str = "or
     alert_report = alerts_module.screen(canonical)
     synthesis = synth.assess(canonical)
     scorecard = score.score(canonical, profile=profile)
+    liability_report = liabilities.screen(canonical)
 
     record: dict = {
         "input": smiles,
@@ -42,6 +43,12 @@ def profile_one(smiles: str, *, check_databases: bool = True, profile: str = "or
         "alert_detail": (
             "; ".join(f"{a.catalog}:{a.description}" for a in alert_report.alerts)
             if alert_report else ""
+        ),
+        "liabilities": len(liability_report.liabilities) if liability_report else None,
+        "liability_severity": liability_report.highest_severity if liability_report else None,
+        "liability_detail": (
+            "; ".join(f"{item.category}: {item.finding}" for item in liability_report.liabilities)
+            if liability_report else ""
         ),
         "sa_score": round(synthesis.sa_score, 2) if synthesis else None,
         "synthesis_tier": synthesis.tier if synthesis else None,
@@ -107,14 +114,17 @@ def build(
         record = frame.iloc[0]
         report.add(Section(title="Identity", body=_identity_text(record), data=record.to_dict()))
         report.add(Section(title="Physicochemical profile", body=_property_text(record)))
-        report.add(Section(title="Liabilities and accessibility", body=_liability_text(record)))
+        report.add(Section(title="Structural alerts", body=_liability_text(record)))
+        report.add(
+            Section(title="Developability liabilities", body=_developability_text(record))
+        )
         if check_databases:
             report.add(Section(title="Prior art and selectivity", body=_prior_art_text(record)))
     else:
         columns = [
             c for c in (
                 "smiles", "mw", "clogp", "tpsa", f"{profile}_score", "limiting_property",
-                "alerts", "alert_severity", "sa_score", "synthesis_tier", "known", "novelty",
+                "alerts", "liabilities", "liability_severity", "sa_score", "known", "novelty",
             ) if c in frame
         ]
         report.add(
@@ -173,13 +183,31 @@ def _liability_text(record) -> str:
     else:
         alert_text = "**No structural alerts** in the PAINS, Brenk, NIH or ZINC catalogs."
 
+    return alert_text
+
+
+def _developability_text(record) -> str:
+    """hERG, solubility, metabolism -- the risks that decide whether a series survives."""
+    count = record.get("liabilities") or 0
+    if count:
+        body = (
+            f"**{count} liability flag(s)**, highest severity "
+            f"{record.get('liability_severity')}:\n\n"
+            + "\n".join(f"- {part.strip()}" for part in record["liability_detail"].split(";"))
+            + "\n\nThese are structural risk flags, not predictions. Each names a feature "
+            "and why it matters; the response to one is an assay, not a deletion — plenty "
+            "of marketed drugs carry several."
+        )
+    else:
+        body = "**No developability liability flags raised.**"
+
     synthesis = (
         f"**Synthetic accessibility:** SA score {record.get('sa_score')} "
         f"({record.get('synthesis_tier')})."
     )
     if record.get("synthesis_flags"):
         synthesis += f" {record['synthesis_flags']}"
-    return f"{alert_text}\n\n{synthesis}"
+    return f"{body}\n\n{synthesis}"
 
 
 def _prior_art_text(record) -> str:
@@ -210,6 +238,9 @@ def _batch_summary(frame: pd.DataFrame, profile: str) -> str:
     ]
     if known is not None:
         lines.append(f"- {known}/{len(frame)} are already in ChEMBL or PubChem")
+    if "liabilities" in frame:
+        no_liability = int((frame["liabilities"] == 0).sum())
+        lines.append(f"- {no_liability}/{len(frame)} raise no developability liability flag")
     if "limiting_property" in frame:
         limiting = frame["limiting_property"].value_counts()
         if not limiting.empty:

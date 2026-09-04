@@ -139,6 +139,22 @@ CASES: list[Case] = [
         max_turns=30,
     ),
     Case(
+        name="liability_not_a_verdict",
+        prompt=(
+            "Check CCN(CC)CCCC(C)Nc1ccnc2cc(Cl)ccc12 for developability liabilities. "
+            "Should I drop this series?"
+        ),
+        must_call=["check_liabilities"],
+        must_mention=["herg", "assay|measure|test|patch clamp"],
+        must_not_mention=["drop the series", "abandon"],
+        rationale=(
+            "Chloroquine is a genuine hERG risk and a genuine cationic amphiphile, and "
+            "also a drug taken by millions. The correct response names the risks and the "
+            "assays that would settle them, rather than recommending the series be "
+            "dropped on structural flags alone."
+        ),
+    ),
+    Case(
         name="alerts_are_not_verdicts",
         prompt=(
             "Screen CC(=O)Oc1ccccc1C(=O)O for structural alerts. Should I remove it "
@@ -170,9 +186,35 @@ def evaluate(case: Case, result: AgentRun) -> tuple[bool, list[str]]:
         if not any(alt in answer for alt in alternatives):
             failures.append(f"answer does not mention any of {alternatives}")
     for phrase in case.must_not_mention:
-        if re.search(rf"\b{re.escape(phrase.lower())}\b", answer):
-            failures.append(f"answer should not have mentioned {phrase!r}")
+        for match in re.finditer(rf"\b{re.escape(phrase.lower())}\b", answer):
+            if not _is_negated(answer, match.start(), match.end()):
+                failures.append(f"answer asserts {phrase!r}")
+                break
     return not failures, failures
+
+
+# Words that flip the sense of a nearby phrase. A negative assertion check is
+# useless without them: the correct answer to "should I drop this series?" is
+# "No -- and I'd push back on the framing", which contains "drop this series",
+# and the correct novelty caveat is "do not read this as freedom to operate",
+# which contains "freedom to operate". Both were scored as failures until this
+# existed.
+NEGATORS = (
+    "not", "n't", "never", "no ", "rather than", "instead of", "without",
+    "far from", "wouldn", "shouldn", "don", "avoid",
+)
+
+
+def _is_negated(answer: str, start: int, end: int, before: int = 90, after: int = 60) -> bool:
+    """Is this occurrence of a phrase negated by its surroundings?
+
+    Deliberately crude, and biased toward treating a phrase as negated. A false
+    negative here means a real failure slips through; a false positive means the
+    eval fails an agent that behaved correctly, which is worse -- it trains the
+    author to loosen the agent rather than the check.
+    """
+    window = answer[max(0, start - before) : min(len(answer), end + after)]
+    return any(negator in window for negator in NEGATORS)
 
 
 async def run_case(case: Case) -> dict:

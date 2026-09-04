@@ -97,10 +97,25 @@ them. So these come first.
 ### `chilecule profile compounds.smi`
 
 The daily workhorse. For one compound or five hundred: standardization,
-properties, structural alerts, synthetic accessibility, a multi-parameter
-scorecard, plus the two questions that are most annoying to answer by hand —
-**has anyone made this** (exact InChIKey against ChEMBL and PubChem, with near
-neighbours) and **what else does it hit**.
+properties, structural alerts, **developability liabilities**, synthetic
+accessibility, a multi-parameter scorecard, plus the two questions that are most
+annoying to answer by hand — **has anyone made this** (exact InChIKey against
+ChEMBL and PubChem, with near neighbours) and **what else does it hit**.
+
+Liabilities are flagged from structure with the reason and the assay that would
+settle them, not as predicted numbers:
+
+```
+[high]   hERG              basic amine, cLogP 4.81, 2 aromatic rings
+                           -> hERG patch clamp
+[medium] phospholipidosis  cationic amphiphile
+                           -> in vitro phospholipidosis screen
+```
+
+That is chloroquine, correctly. The usual approach here is to train ADMET
+regressors on public data and print a number; that needs torch and transformers,
+is misleading outside its applicability domain, and cannot be argued with. A
+flag naming the feature and the assay is less precise and much more useful.
 
 The scorecard reports the *limiting property*, not just a score. `0.42` tells a
 chemist nothing; "limited by cLogP at 5.8, target below 4" is a design
@@ -221,7 +236,12 @@ Every curated frame carries its ChEMBL release for CC BY-SA attribution.
 tools/          Pure functions over molecules and structures. No LLM anywhere.
   chem          standardization, descriptors, ligand & lipophilic efficiency
   alerts        PAINS / Brenk / NIH / ZINC, annotated with severity — never deleted
+  liabilities   hERG, phospholipidosis, solubility, metabolism, bioactivation
   lookup        novelty (ChEMBL/PubChem) and promiscuity across reported targets
+  synth         synthetic accessibility with complexity flags
+  score         multi-parameter scorecards reporting the limiting property
+  design        analog proposals from mined matched-pair transformations
+  rgroup        R-group decomposition and Free-Wilson
   chembl        retrieval + curation with a full audit trail
   sar           scaffolds, matched molecular pairs, activity cliffs
   structure     PDB retrieval, structure ranking, receptor prep, docking boxes

@@ -162,19 +162,30 @@ by default.
 | `docking_not_affinity` | Asked for "predicted binding affinity in nM", runs the dock and refuses the framing |
 | `promiscuity_reading` | Reads the selectivity window, not the raw target count |
 | `out_of_domain_design` | Refuses to quote expected potency gains for a steroid using kinase data |
+| `liability_not_a_verdict` | Names hERG risk and the assay, rather than dropping a marketed drug |
 | `alerts_are_not_verdicts` | Does not recommend deleting aspirin because it matches a Brenk alert |
 
-Currently 6/6. Two things worth saying about that number.
+Currently 7/7. Two things worth saying about that number.
 
 **It is not stable.** `out_of_domain_design` passed, then failed, then passed
 across three runs — the first two on assertion wording, not behaviour. Agent
 evals measure a distribution, and six cases at one sample each is a smoke test
 wearing a lab coat.
 
-**Writing it found bugs in the eval, not just the agent.** Two cases asserted
-phrasing rather than behaviour: one demanded the literal string "not found" from
-an agent that said "no hit in ChEMBL or PubChem", and one pinned a refusal path
-that my own attachment-context fix had changed. Both were the eval being wrong.
+**Writing it found bugs in the eval, not just the agent.** Four times now the
+harness has been wrong rather than the agent. Two cases asserted phrasing rather
+than behaviour: one demanded the literal string "not found" from an agent that
+said "no hit in ChEMBL or PubChem", and one pinned a refusal path that my own
+attachment-context fix had changed.
+
+The other two were worse, because they failed the agent for behaving *correctly*.
+Negative checks were plain substring searches, so writing "do not read this as
+freedom to operate" failed a case forbidding "freedom to operate", and answering
+"should you drop this series?" with "No — and I'd push back on the framing"
+failed a case forbidding "drop the series". Negative assertions have to be
+negation-aware, and the bias should be toward treating a phrase as negated: a
+missed failure is a gap, but an eval that punishes correct behaviour trains you
+to loosen the agent instead of the check.
 
 ---
 
