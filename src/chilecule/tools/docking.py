@@ -236,6 +236,9 @@ class RedockResult:
     threshold: float
     detail: str
 
+    def rmsd_display(self) -> str:
+        return f"{self.rmsd:.2f} A" if self.rmsd is not None else "not measurable"
+
     def to_dict(self) -> dict:
         return {
             "ligand": self.residue_name,

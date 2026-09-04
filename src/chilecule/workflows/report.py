@@ -39,7 +39,11 @@ def dataframe_to_markdown(df: pd.DataFrame, max_cell_width: int = MAX_CELL_WIDTH
     """
 
     def cell(value: object) -> str:
-        text = "" if value is None else str(value)
+        # NaN reaches here as a float and would render as the literal "nan",
+        # which reads as a value rather than as absence.
+        if value is None or (isinstance(value, float) and value != value):
+            return "--"
+        text = str(value)
         text = text.replace("|", "\\|").replace("\n", " ")
         if len(text) > max_cell_width:
             text = text[: max_cell_width - 1] + "…"
