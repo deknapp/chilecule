@@ -78,3 +78,37 @@ def test_ligand_efficiency_guards_bad_input():
 def test_lipophilic_efficiency_is_pic50_minus_clogp():
     # 10 nM -> pIC50 8.0; with cLogP 3.0, LLE = 5.0
     assert lipophilic_efficiency(10.0, 3.0) == pytest.approx(5.0, abs=0.01)
+
+
+# ------------------------------------------------------------------ analog design
+
+
+def test_implausible_products_are_named_not_silently_kept():
+    from chilecule.tools.design import implausibility
+
+    assert implausibility("Fc1ccc(Nc2ncnc3cc(OBr)c(OCCCN4CCOCC4)cc23)cc1Cl") == (
+        "hypohalite ester (O-halogen)"
+    )
+    assert implausibility("CC(=O)Oc1ccccc1C(=O)O") is None
+
+
+def test_transformation_is_not_applied_outside_its_attachment_context():
+    """REGRESSION: found by running the agent, not by unit testing the library.
+
+    A methyl-to-bromo transformation mined on aromatic carbon was being applied
+    to the methyl of a methoxy group, producing an aryl hypobromite. RDKit
+    builds it happily; no chemist can make it.
+    """
+    from chilecule.tools.design import Transformation, apply_transformation
+
+    aromatic = Transformation(
+        lhs="C[*:1]", rhs="Br[*:1]", context="c",
+        n_pairs=28, median_delta=0.5, std_delta=0.4, min_delta=0.0, max_delta=1.0,
+    )
+    gefitinib = "COc1cc2ncnc(Nc3ccc(F)c(Cl)c3)c2cc1OCCCN1CCOCC1"
+    assert apply_transformation(gefitinib, aromatic) == []
+
+    # The same transformation must still work where it is valid.
+    toluene_like = "Cc1ccc(Nc2ncnc3ccccc23)cc1"
+    products = apply_transformation(toluene_like, aromatic)
+    assert products and all("OBr" not in p for p in products)

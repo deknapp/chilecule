@@ -126,3 +126,24 @@ def test_empty_input_is_handled_everywhere():
     assert matched_pairs(empty) == []
     assert scaffold_summary(empty).empty
     assert activity_cliffs(empty).empty
+
+
+def test_attachment_context_distinguishes_carbon_from_oxygen():
+    """REGRESSION: transformations were pooled across attachment environments.
+
+    'methyl becomes bromo' is ordinary aromatic substitution on a ring carbon
+    and a hypobromite ester on a methoxy oxygen. Mining them as one
+    transformation produced design proposals nobody can synthesise.
+    """
+    from chilecule.tools.sar import attachment_context
+
+    assert attachment_context("c1ccccc1[*:1]") == "c"
+    assert attachment_context("COc1cc2ncnc(Nc3cccc(Br)c3)c2cc1O[*:1]") == "O"
+    assert attachment_context("CCN[*:1]") == "N"
+    assert attachment_context("not a fragment") is None
+
+
+def test_transformations_are_grouped_by_context(halogen_series):
+    summary = transformation_summary(matched_pairs(halogen_series), min_occurrences=1)
+    assert "context" in summary.columns
+    assert summary["context"].notna().all()

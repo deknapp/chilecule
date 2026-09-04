@@ -106,6 +106,30 @@ def scaffold_summary(df: pd.DataFrame, smiles_col: str = "smiles",
 # --------------------------------------------------- Matched molecular pairs
 
 
+def attachment_context(fragment_smiles: str) -> str | None:
+    """What the fragment attaches to: element plus aromaticity, e.g. 'c' or 'O'.
+
+    A matched-pair transformation is only meaningful in the environment it was
+    observed in. "methyl becomes bromo" is an ordinary aromatic substitution
+    when the attachment atom is a ring carbon, and produces a hypobromite ester
+    -- a compound that does not exist -- when the attachment atom is the oxygen
+    of a methoxy group. Recording the context is what keeps the two apart.
+    """
+    mol = Chem.MolFromSmiles(fragment_smiles, sanitize=False)
+    if mol is None:
+        return None
+    for atom in mol.GetAtoms():
+        if atom.GetAtomicNum() != 0:
+            continue
+        neighbours = atom.GetNeighbors()
+        if not neighbours:
+            return None
+        neighbour = neighbours[0]
+        symbol = neighbour.GetSymbol()
+        return symbol.lower() if neighbour.GetIsAromatic() else symbol
+    return None
+
+
 @dataclass(frozen=True)
 class MatchedPair:
     """One structural transformation observed between two compounds."""
@@ -118,6 +142,7 @@ class MatchedPair:
     transformation: str
     activity_a: float
     activity_b: float
+    context: str = ""
 
     @property
     def delta(self) -> float:
@@ -222,6 +247,7 @@ def matched_pairs(
                             core=core,
                             transformation=f"{sub_a} >> {sub_b}",
                             activity_a=round(act_a, 2), activity_b=round(act_b, 2),
+                            context=attachment_context(core) or "",
                         )
                     )
                 if max_pairs and len(pairs) >= max_pairs:
@@ -244,14 +270,25 @@ def transformation_summary(pairs: list[MatchedPair], min_occurrences: int = 3) -
     F at this position gained a median 0.4 log units across 12 pairs" is a
     design rule. A single observation is an anecdote, which is what
     ``min_occurrences`` guards against.
+
+    Transformations are grouped by attachment context as well as by the swap
+    itself, so that a change observed on an aromatic carbon is never pooled
+    with the same change on an ether oxygen.
     """
     if not pairs:
         return pd.DataFrame()
 
-    rows = [{"transformation": p.transformation, "delta": p.delta} for p in pairs]
+    rows = [
+        {"transformation": p.transformation, "context": p.context, "delta": p.delta}
+        for p in pairs
+    ]
     df = pd.DataFrame(rows)
+    # Grouped by transformation AND attachment context: the same substituent
+    # swap is a different chemical event on an aromatic carbon than on an ether
+    # oxygen, and pooling them produces statistics for a transformation nobody
+    # can perform.
     out = (
-        df.groupby("transformation")
+        df.groupby(["transformation", "context"])
         .agg(
             n_pairs=("delta", "size"),
             median_delta=("delta", "median"),

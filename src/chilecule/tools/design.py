@@ -27,13 +27,45 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 import pandas as pd
 from rdkit import Chem, DataStructs
 from rdkit.Chem import rdMMPA, rdmolops
 
 from .chem import parse_smiles, standardize
-from .sar import fingerprint, matched_pairs, transformation_summary
+from .sar import attachment_context, fingerprint, matched_pairs, transformation_summary
+
+# Substructures that cannot be made, or would not survive contact with a
+# solvent. This is a backstop behind the attachment-context check, not a
+# substitute for it: fragment recombination can produce chemistry that is
+# formally valid to RDKit and absurd to a chemist.
+IMPLAUSIBLE_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("[OX2][Cl,Br,I]", "hypohalite ester (O-halogen)"),
+    ("[SX2][Cl,Br,I]", "sulfenyl halide (S-halogen)"),
+    ("[Cl,Br,I][Cl,Br,I]", "halogen-halogen bond"),
+    ("[NX3][Cl,Br,I]", "N-halamine"),
+    ("[OX2][OX2][OX2]", "trioxide"),
+    ("[NX3][NX3][NX3]", "triazane"),
+)
+
+
+@lru_cache(maxsize=1)
+def _implausible_queries() -> tuple[tuple[object, str], ...]:
+    return tuple(
+        (Chem.MolFromSmarts(pattern), label) for pattern, label in IMPLAUSIBLE_PATTERNS
+    )
+
+
+def implausibility(smiles: str) -> str | None:
+    """Name the reason a structure could not exist, or None if it is plausible."""
+    mol = parse_smiles(smiles)
+    if mol is None:
+        return "unparseable"
+    for query, label in _implausible_queries():
+        if query is not None and mol.HasSubstructMatch(query):
+            return label
+    return None
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +76,7 @@ class Transformation:
 
     lhs: str
     rhs: str
+    context: str
     n_pairs: int
     median_delta: float
     std_delta: float
@@ -54,6 +87,14 @@ class Transformation:
     @property
     def label(self) -> str:
         return f"{self.lhs} >> {self.rhs}"
+
+    @property
+    def context_label(self) -> str:
+        """Human-readable attachment environment."""
+        if not self.context:
+            return "unspecified"
+        aromatic = self.context.islower()
+        return f"{'aromatic ' if aromatic else ''}{self.context.upper()}"
 
     @property
     def reliability(self) -> str:
@@ -75,6 +116,7 @@ class Transformation:
     def to_dict(self) -> dict:
         return {
             "transformation": self.label,
+            "attached_to": self.context_label,
             "n_pairs": self.n_pairs,
             "median_delta": self.median_delta,
             "std_delta": self.std_delta,
@@ -114,6 +156,7 @@ def mine_transformations(
             Transformation(
                 lhs=lhs.strip(),
                 rhs=rhs.strip(),
+                context=str(row.get("context", "")),
                 n_pairs=int(row["n_pairs"]),
                 median_delta=float(row["median_delta"]),
                 std_delta=float(row["std_delta"]) if pd.notna(row["std_delta"]) else 0.0,
@@ -171,6 +214,12 @@ def apply_transformation(smiles: str, transformation: Transformation) -> list[st
         for keep, changed in ((left, right), (right, left)):
             if _canonical_fragment(changed) != wanted:
                 continue
+            # The transformation is only valid where it was observed. Applying
+            # "methyl becomes bromo" to the methyl of a methoxy group yields a
+            # hypobromite ester, which RDKit will happily construct and no
+            # chemist can make.
+            if transformation.context and attachment_context(keep) != transformation.context:
+                continue
             kept_mol = Chem.MolFromSmiles(keep, sanitize=False)
             if kept_mol is None:
                 continue
@@ -181,8 +230,13 @@ def apply_transformation(smiles: str, transformation: Transformation) -> list[st
             except Exception:
                 continue
             result = standardize(Chem.MolToSmiles(product), canonical_tautomer=False)
-            if result.ok and result.smiles != Chem.MolToSmiles(mol):
-                products.add(result.smiles)
+            if not result.ok or result.smiles == Chem.MolToSmiles(mol):
+                continue
+            reason = implausibility(result.smiles)
+            if reason:
+                log.debug("rejected %s from %s: %s", result.smiles, transformation.label, reason)
+                continue
+            products.add(result.smiles)
     return sorted(products)
 
 
