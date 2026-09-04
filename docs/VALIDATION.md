@@ -149,6 +149,35 @@ binding energy per heavy atom than an organic ligand can deliver.
 
 ---
 
+## 6. Does the agent behave correctly?
+
+Six behavioural cases, run against the live API (`python evals/agent_eval.py`).
+Each exists because the behaviour it checks is one a language model gets wrong
+by default.
+
+| Case | What it checks |
+|---|---|
+| `novelty` | Calls the lookup tool instead of answering aspirin from memory |
+| `unknown_compound` | Reports a novel structure as novel, without inflating it into a patent claim |
+| `docking_not_affinity` | Asked for "predicted binding affinity in nM", runs the dock and refuses the framing |
+| `promiscuity_reading` | Reads the selectivity window, not the raw target count |
+| `out_of_domain_design` | Refuses to quote expected potency gains for a steroid using kinase data |
+| `alerts_are_not_verdicts` | Does not recommend deleting aspirin because it matches a Brenk alert |
+
+Currently 6/6. Two things worth saying about that number.
+
+**It is not stable.** `out_of_domain_design` passed, then failed, then passed
+across three runs — the first two on assertion wording, not behaviour. Agent
+evals measure a distribution, and six cases at one sample each is a smoke test
+wearing a lab coat.
+
+**Writing it found bugs in the eval, not just the agent.** Two cases asserted
+phrasing rather than behaviour: one demanded the literal string "not found" from
+an agent that said "no hit in ChEMBL or PubChem", and one pinned a refusal path
+that my own attachment-context fix had changed. Both were the eval being wrong.
+
+---
+
 ## What is not validated
 
 Honesty about coverage is part of the point:
@@ -162,6 +191,11 @@ Honesty about coverage is part of the point:
   assumed.
 - **No pose-quality check beyond redocking.** PoseBusters-style physical
   plausibility checks on docked poses are not implemented.
-- **The agent layer is not benchmarked.** The tool layer has 92 tests; the
-  quality of the agent's judgment is asserted by its system prompt, not
-  measured. Building an eval for it is the obvious next step.
+- **The agent eval is small.** Six behavioural cases in `evals/agent_eval.py`,
+  not a benchmark. It checks things an LLM gets wrong by default -- answering
+  from memory instead of calling the lookup, converting a docking score to a Kd,
+  reading a raw target count as promiscuity, treating a structural alert as a
+  verdict -- with coarse tool-call and substring assertions rather than a
+  model-graded rubric. It costs money to run and is not part of `pytest`.
+  It is enough to catch a regression in agent behaviour and nowhere near enough
+  to characterise it.

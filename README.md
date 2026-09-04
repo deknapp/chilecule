@@ -276,9 +276,22 @@ aromatic substitution on a ring carbon and absurd on an ether oxygen.
 Transformations now carry their attachment context as part of their identity,
 with a plausibility backstop behind it. Both bugs have regression tests.
 
-Neither of these is a story about the model being clever. They are a story about
+**And a third, after the fix.** Running the design task again, the agent
+reported that `design_analogs` "errors on every parameter combination I tried —
+worth a bug report." It did: adding the attachment context to the
+transformation dict without adding it to the corresponding pydantic model made
+`extra="forbid"` reject every response. The guard worked exactly as intended and
+nothing tested the contract between the two layers, so `tests/test_schema_contracts.py`
+now asserts that every model accepts exactly what its dataclass produces.
+
+None of these is a story about the model being clever. They are a story about
 the tool layer being wrong in ways that only showed up when something tried to
 *use* it for a real task.
+
+There is now a small behavioural eval in [`evals/agent_eval.py`](evals/agent_eval.py) —
+six cases checking things a model gets wrong by default, like answering from
+memory instead of calling the lookup, or converting a docking score into a Kd.
+It makes real API calls, so it is not part of `pytest`.
 
 ---
 

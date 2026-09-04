@@ -477,6 +477,13 @@ class ScorecardResultModel(ToolResult):
 
 class TransformationModel(ToolResult):
     transformation: str
+    attached_to: str = Field(
+        description=(
+            "Attachment environment the transformation was mined in, e.g. 'aromatic C'. "
+            "The same swap is a different chemical event on a ring carbon and on an ether "
+            "oxygen, and is only valid where it was observed."
+        )
+    )
     n_pairs: int
     median_delta: float = Field(description="Median change in pChEMBL, in log units.")
     std_delta: float

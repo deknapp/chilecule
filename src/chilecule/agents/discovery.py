@@ -23,6 +23,7 @@ either an ``ANTHROPIC_API_KEY`` or an ``ant auth login`` profile. Run
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 # The scientific standards the agent is held to. Written as prohibitions
@@ -141,6 +142,61 @@ def build_options(
     )
 
 
+@dataclass
+class AgentRun:
+    """What an agent did, not just what it said.
+
+    ``tools_called`` is the part that makes behaviour testable. Whether an
+    answer *sounds* careful is a matter of opinion; whether the agent actually
+    called the novelty tool before asserting a compound is known is a fact.
+    """
+
+    answer: str
+    tools_called: list[str] = field(default_factory=list)
+    n_turns: int = 0
+
+    def called(self, tool: str) -> bool:
+        return any(name.endswith(tool) for name in self.tools_called)
+
+    def to_dict(self) -> dict:
+        return {
+            "answer": self.answer,
+            "tools_called": self.tools_called,
+            "unique_tools": sorted(set(self.tools_called)),
+            "n_turns": self.n_turns,
+        }
+
+
+async def run_detailed(
+    task: str,
+    *,
+    model: str = "claude-opus-5",
+    max_turns: int = 40,
+    extra_instructions: str = "",
+) -> AgentRun:
+    """Run a task and return both the answer and the tool calls made."""
+    from claude_agent_sdk import query
+
+    options = build_options(
+        model=model, max_turns=max_turns, extra_instructions=extra_instructions
+    )
+
+    chunks: list[str] = []
+    tools_called: list[str] = []
+    turns = 0
+    async for message in query(prompt=task, options=options):
+        turns += 1
+        for block in getattr(message, "content", []) or []:
+            text = getattr(block, "text", None)
+            if text:
+                chunks.append(text)
+            name = getattr(block, "name", None)
+            if name and type(block).__name__.startswith("ToolUse"):
+                tools_called.append(name)
+
+    return AgentRun(answer="\n".join(chunks), tools_called=tools_called, n_turns=turns)
+
+
 async def run(
     task: str,
     *,
@@ -157,25 +213,13 @@ async def run(
         from chilecule.agents.discovery import run
 
         answer = asyncio.run(run(
-            "Assess EGFR as a structure-based target. Pick a PDB entry to dock "
-            "into and justify the choice. Verify the docking protocol before "
-            "trusting any score."
+            "I have a hit against EGFR. What should I make next, and how much "
+            "should I trust each suggestion?"
         ))
     """
-    from claude_agent_sdk import query
-
-    options = build_options(
-        model=model, max_turns=max_turns, extra_instructions=extra_instructions
+    result = await run_detailed(
+        task, model=model, max_turns=max_turns, extra_instructions=extra_instructions
     )
-
-    chunks: list[str] = []
-    async for message in query(prompt=task, options=options):
-        for block in getattr(message, "content", []) or []:
-            text = getattr(block, "text", None)
-            if text:
-                chunks.append(text)
-
-    answer = "\n".join(chunks)
     if output_path:
-        Path(output_path).write_text(answer)
-    return answer
+        Path(output_path).write_text(result.answer)
+    return result.answer
