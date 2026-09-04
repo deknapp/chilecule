@@ -375,3 +375,148 @@ class ErrorResult(ToolResult):
 
     error: str
     suggestion: str | None = None
+
+
+# ------------------------------------------- molecule-in tools (profiling, design)
+
+
+class NeighbourModel(ToolResult):
+    chembl_id: str | None
+    name: str | None = None
+    similarity: float
+    max_phase: float | None = None
+    smiles: str | None = None
+
+
+class NoveltyResult(ToolResult):
+    smiles: str
+    inchikey: str | None
+    is_known: bool
+    verdict: str = Field(
+        description="Plain-language read: approved drug, known compound, or novel."
+    )
+    chembl_id: str | None = None
+    chembl_name: str | None = None
+    max_phase: float | None = None
+    pubchem_cid: int | None = None
+    nearest_neighbours: list[NeighbourModel] = Field(default_factory=list)
+    caveat: str = (
+        "Structural novelty only. A compound absent from ChEMBL and PubChem may still "
+        "fall inside a Markush claim. This is not a freedom-to-operate opinion."
+    )
+    error: str | None = None
+
+
+class PromiscuityTargetModel(ToolResult):
+    target: str
+    organism: str | None = None
+    target_chembl_id: str | None = None
+    n_measurements: int
+    best_pchembl: float
+
+
+class PromiscuityResult(ToolResult):
+    chembl_id: str | None
+    n_protein_targets: int
+    n_non_protein_excluded: int = Field(
+        description="Cell-line and other non-protein ChEMBL targets excluded from the count."
+    )
+    selectivity_window_log: float | None = Field(
+        description=(
+            "Log units between the best target and the median of the rest. This, not the "
+            "raw count, is the promiscuity signal: a wide window means a genuine primary "
+            "target with a panel-annotation tail; a flat profile indicates an aggregator."
+        )
+    )
+    n_activity_records: int
+    assessment: str
+    targets: list[PromiscuityTargetModel] = Field(default_factory=list)
+    error: str | None = None
+
+
+class SynthesisResult(ToolResult):
+    smiles: str
+    sa_score: float = Field(
+        description="Ertl-Schuffenhauer synthetic accessibility, 1 easy to 10 hard."
+    )
+    tier: str
+    n_stereocentres: int
+    n_unassigned_stereocentres: int
+    n_spiro: int
+    n_bridgehead: int
+    n_macrocycles: int
+    flags: list[str] = Field(default_factory=list)
+    summary: str
+    caveat: str = (
+        "SA score measures fragment familiarity, not route length. Triage across many "
+        "structures, not a substitute for retrosynthetic analysis."
+    )
+
+
+class ScorecardComponent(ToolResult):
+    property: str
+    value: float | None
+    desirability: float
+    weight: float
+    target: str
+    rationale: str = ""
+
+
+class ScorecardResultModel(ToolResult):
+    smiles: str
+    profile: str
+    score: float
+    verdict: str = Field(
+        description="Score plus the limiting property, which is the actionable part."
+    )
+    limiting_property: str | None = Field(
+        description="The property costing this compound the most, weight included."
+    )
+    components: list[ScorecardComponent] = Field(default_factory=list)
+
+
+class TransformationModel(ToolResult):
+    transformation: str
+    n_pairs: int
+    median_delta: float = Field(description="Median change in pChEMBL, in log units.")
+    std_delta: float
+    range: list[float]
+    reliability: str = Field(
+        description="well-supported / moderate / context-dependent / anecdotal."
+    )
+    source: str
+
+
+class AnalogModel(ToolResult):
+    smiles: str
+    transformation: str
+    expected_effect: str = Field(
+        description=(
+            "What the matched-pair evidence says. Reads 'no decision' when the parent "
+            "falls outside the chemical space the evidence came from."
+        )
+    )
+    n_pairs: int
+    median_delta: float
+    reliability: str
+    similarity_to_parent: float
+    mw: float | None = None
+    clogp: float | None = None
+    sa_score: float | None = None
+    alerts: int = 0
+
+
+class AnalogDesignResult(ToolResult):
+    parent: str
+    target: str
+    n_transformations_mined: int
+    n_evidence_compounds: int
+    in_evidence_domain: bool
+    domain_note: str = ""
+    transformations: list[TransformationModel] = Field(default_factory=list)
+    analogs: list[AnalogModel] = Field(default_factory=list)
+    interpretation: str = (
+        "Hypotheses supported by precedent, not predictions. Each transformation moved "
+        "potency by the stated amount in the contexts where it was observed; whether it "
+        "does so on this parent is what the experiment is for."
+    )

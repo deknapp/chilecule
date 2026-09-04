@@ -50,11 +50,14 @@ except ImportError:
 
 from .. import __version__
 from ..tools import alerts as alerts_module
-from ..tools import chem, chembl, pockets, sar, structure
+from ..tools import chem, chembl, lookup, pockets, sar, structure, synth
+from ..tools import score as score_module
 from .models import (
     ActivesResult,
     AlertMatch,
     AlertsResult,
+    AnalogDesignResult,
+    AnalogModel,
     ChainId,
     ChemblId,
     ComparisonResult,
@@ -64,20 +67,28 @@ from .models import (
     Exhaustiveness,
     LigandModel,
     MaxRecords,
+    NeighbourModel,
+    NoveltyResult,
     PdbId,
     PocketModel,
     PocketsResult,
     PotencyNanomolar,
+    PromiscuityResult,
+    PromiscuityTargetModel,
     PropertiesResult,
     RedockControl,
+    ScorecardComponent,
+    ScorecardResultModel,
     Smiles,
     StandardizationResult,
     StructureHitModel,
     StructureInspection,
     StructureSearchResult,
+    SynthesisResult,
     TargetHit,
     TargetSearchResult,
     TopN,
+    TransformationModel,
 )
 
 mcp = _Server(
@@ -437,6 +448,251 @@ def dock_molecule(
     )
 
 
+
+
+# ------------------------------------------------ molecule-in: profiling a compound
+
+
+@mcp.tool()
+def check_compound_novelty(smiles: Smiles) -> NoveltyResult | ErrorResult:
+    """Has anyone made this? Exact-structure lookup in ChEMBL and PubChem by InChIKey,
+    plus a near-neighbour search.
+
+    Use this whenever you are asked whether a compound is known, novel, or a drug --
+    do not answer from memory. The distinction between an exact match and a close
+    neighbour matters: an exact hit means the compound exists and may be purchasable
+    with data attached, while a 0.9-similar hit means you are inside somebody's series.
+
+    Structural novelty only. A compound absent from both databases can still fall inside
+    a Markush claim, so never present this as a freedom-to-operate opinion.
+    """
+    report = lookup.check_novelty(smiles)
+    if report.error:
+        return ErrorResult(error=report.error, suggestion="Check that the SMILES parses.")
+    return NoveltyResult(
+        smiles=report.smiles,
+        inchikey=report.inchikey,
+        is_known=report.is_known,
+        verdict=report.verdict,
+        chembl_id=report.chembl_id,
+        chembl_name=report.chembl_name,
+        max_phase=report.max_phase,
+        pubchem_cid=report.pubchem_cid,
+        nearest_neighbours=[NeighbourModel(**n) for n in report.nearest_neighbours],
+    )
+
+
+@mcp.tool()
+def check_promiscuity(chembl_id: ChemblId) -> PromiscuityResult | ErrorResult:
+    """What else does this compound hit? Summarizes reported activity across every
+    ChEMBL protein target.
+
+    Read ``selectivity_window_log``, not the target count. The count is misleading:
+    a kinase inhibitor that has been through kinome panels accumulates hundreds of
+    target annotations and is not promiscuous in any troubling sense. What separates
+    that from a frequent hitter is whether a primary target stands out. A wide window
+    means a real primary target with a panel-annotation tail; a flat profile across many
+    unrelated proteins is the signature of an aggregator, a reactive compound, or assay
+    interference.
+
+    Cell lines and other non-protein ChEMBL targets are excluded and counted separately.
+    Get the ChEMBL id from check_compound_novelty.
+    """
+    report = lookup.check_promiscuity(chembl_id)
+    if report.error:
+        return ErrorResult(error=report.error)
+    return PromiscuityResult(
+        chembl_id=report.chembl_id,
+        n_protein_targets=report.n_targets,
+        n_non_protein_excluded=report.n_non_protein_excluded,
+        selectivity_window_log=report.selectivity_window,
+        n_activity_records=report.n_records,
+        assessment=report.assessment,
+        targets=[PromiscuityTargetModel(**t) for t in report.targets],
+    )
+
+
+@mcp.tool()
+def assess_synthesis(smiles: Smiles) -> SynthesisResult | ErrorResult:
+    """Can it be made? Synthetic accessibility plus structural complexity flags.
+
+    SA score runs 1 (trivial) to 10 (intractable) and measures fragment familiarity --
+    whether the molecule is built from pieces that appear in known compounds. It is not
+    a route prediction, so it is good at flagging exotic structures and blind to a
+    familiar-looking molecule that needs awkward regiochemistry.
+
+    The flags catch what the score misses: unassigned stereocentres imply a separation
+    problem, and macrocycles, spiro centres and bridgeheads imply a hard synthesis
+    however ordinary the fragments look.
+    """
+    assessment = synth.assess(smiles)
+    if assessment is None:
+        return ErrorResult(error="could not parse SMILES")
+    payload = assessment.to_dict()
+    payload.pop("caveat", None)
+    return SynthesisResult(**payload)
+
+
+@mcp.tool()
+def score_compound(smiles: Smiles, profile: str = "oral") -> ScorecardResultModel | ErrorResult:
+    """Multi-parameter scorecard. Profiles: 'oral' (oral small molecule) or 'lead_like'
+    (fragment-to-lead space, with headroom left for optimization).
+
+    Report ``limiting_property``, not just the score. "0.42" tells a chemist nothing;
+    "limited by cLogP at 5.8, target below 4" is a design instruction. The score is a
+    ranking key, the limiting property is the actionable output.
+
+    The windows are literature defaults and are project-dependent. An inhaled compound
+    and a CNS agent do not share a TPSA target, so treat the numbers as a starting point
+    rather than a standard.
+    """
+    try:
+        result = score_module.score(smiles, profile=profile)
+    except ValueError as exc:
+        return ErrorResult(error=str(exc), suggestion="Use profile 'oral' or 'lead_like'.")
+    if result is None:
+        return ErrorResult(error="could not parse SMILES")
+    return ScorecardResultModel(
+        smiles=result.smiles,
+        profile=result.profile,
+        score=round(result.score, 3),
+        verdict=result.verdict,
+        limiting_property=result.limiting["property"] if result.limiting else None,
+        components=[ScorecardComponent(**c) for c in result.components],
+    )
+
+
+@mcp.tool()
+def profile_compound(smiles: Smiles, check_databases: bool = True) -> str:
+    """Everything worth knowing about one compound, in a single call.
+
+    Composes standardization, physicochemical properties, structural alerts, synthetic
+    accessibility, the oral scorecard, database novelty and promiscuity. Prefer this over
+    calling the individual tools one by one when the question is open-ended
+    ("tell me about this compound"), and use the individual tools when you need one
+    specific answer.
+
+    Set check_databases=False to skip the network lookups when you only need computed
+    properties and the answer needs to be fast.
+    """
+    from ..workflows.profile import profile_one
+
+    return _json(profile_one(smiles, check_databases=check_databases))
+
+
+# ------------------------------------------------ molecule-in: designing the next one
+
+
+@mcp.tool()
+def design_analogs(
+    parent_smiles: Smiles,
+    target: str,
+    max_analogs: int = 20,
+    min_occurrences: int = 4,
+) -> AnalogDesignResult | ErrorResult:
+    """What should I make next? Proposes analogs of a hit using transformations that
+    medicinal chemists have already made against this target.
+
+    These are NOT generated molecules. Every proposal comes from a matched molecular pair
+    mined from ChEMBL for this target, and carries the evidence: how many times that exact
+    swap was made and what it did to potency.
+
+    How to report the result. ``median_delta`` is what the transformation did in the
+    contexts where it was observed -- it is precedent, not a prediction for this parent.
+    Always read ``reliability`` alongside it: a large median with a large spread means the
+    transformation is context-dependent and will not necessarily reproduce here. When
+    ``in_evidence_domain`` is false, the expected effects read "no decision" and you must
+    report them that way, because a matched-pair median does not transfer across
+    chemotypes.
+
+    ``target`` is a gene symbol or ChEMBL id, e.g. 'EGFR' or 'CHEMBL203'.
+    """
+    from ..tools.chembl import curate_activities
+    from ..tools.design import enumerate_analogs, mine_transformations
+
+    client = _client()
+    targets = client.find_targets(target)
+    if targets.empty:
+        return ErrorResult(
+            error=f"no ChEMBL target matched {target!r}",
+            suggestion="Use a gene symbol such as EGFR, or resolve it with find_chembl_target.",
+        )
+
+    chembl_target = targets.iloc[0]
+    raw = client.fetch_activities(chembl_target["target_chembl_id"], max_records=5000)
+    actives, _ = curate_activities(
+        raw, target_chembl_id=chembl_target["target_chembl_id"],
+        chembl_release=client.release(),
+    )
+    transformations = mine_transformations(actives, min_occurrences=min_occurrences)
+    if not transformations:
+        return ErrorResult(
+            error=(
+                f"no transformation was observed at least {min_occurrences} times in "
+                f"{len(actives)} curated compounds for {target}"
+            ),
+            suggestion=(
+                "Lower min_occurrences, or accept that this target's chemical matter is "
+                "too diverse for matched-pair design. That is a real answer, not a failure."
+            ),
+        )
+
+    proposals = enumerate_analogs(
+        parent_smiles,
+        transformations,
+        evidence_compounds=actives["smiles"].head(500).tolist(),
+        max_total=max_analogs,
+    )
+    if not proposals:
+        return ErrorResult(
+            error="none of the mined transformations apply to this parent",
+            suggestion=(
+                "No fragment of the parent matches the left-hand side of any transformation "
+                "with a track record on this target. The changes that worked here were made "
+                "at positions this compound does not have."
+            ),
+        )
+
+    analogs = []
+    for proposal in proposals:
+        props = chem.properties(proposal.smiles)
+        synthesis = synth.assess(proposal.smiles)
+        alert_report = alerts_module.screen(proposal.smiles)
+        analogs.append(
+            AnalogModel(
+                smiles=proposal.smiles,
+                transformation=proposal.transformation.label,
+                expected_effect=proposal.expected_effect,
+                n_pairs=proposal.transformation.n_pairs,
+                median_delta=proposal.transformation.median_delta,
+                reliability=proposal.transformation.reliability,
+                similarity_to_parent=proposal.similarity_to_parent,
+                mw=props.mw if props else None,
+                clogp=props.clogp if props else None,
+                sa_score=round(synthesis.sa_score, 2) if synthesis else None,
+                alerts=len(alert_report.alerts) if alert_report else 0,
+            )
+        )
+
+    return AnalogDesignResult(
+        parent=proposals[0].parent_smiles,
+        target=f"{chembl_target['target_chembl_id']} ({chembl_target['pref_name']})",
+        n_transformations_mined=len(transformations),
+        n_evidence_compounds=len(actives),
+        in_evidence_domain=proposals[0].in_evidence_domain,
+        domain_note=proposals[0].domain_note,
+        transformations=[TransformationModel(**t.to_dict()) for t in transformations[:12]],
+        analogs=analogs,
+    )
+
+
+# The entrypoint stays at the very bottom of this module, deliberately.
+#
+# Running the server as `python -m chilecule.mcp.server` executes the module top
+# to bottom, so anything defined below `if __name__ == "__main__"` is never
+# reached before run() blocks. Tools appended after this block register fine on
+# an in-process import and are silently missing from the served tool list --
+# which is exactly what happened, and what the allowlist test caught.
 def run(transport: str = "stdio") -> None:
     """Start the MCP server."""
     mcp.run(transport=transport)

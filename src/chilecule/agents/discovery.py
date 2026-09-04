@@ -89,6 +89,12 @@ CHILECULE_TOOLS = [
     "mcp__chilecule__inspect_structure",
     "mcp__chilecule__detect_pockets",
     "mcp__chilecule__dock_molecule",
+    "mcp__chilecule__check_compound_novelty",
+    "mcp__chilecule__check_promiscuity",
+    "mcp__chilecule__assess_synthesis",
+    "mcp__chilecule__score_compound",
+    "mcp__chilecule__profile_compound",
+    "mcp__chilecule__design_analogs",
 ]
 
 
