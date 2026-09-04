@@ -1,0 +1,23 @@
+chilecule
+Copyright 2026 Nathaniel Knapp
+
+Licensed under the Apache License, Version 2.0 (the "License").
+You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
+This product depends on third-party open-source software. A full audit of every
+dependency's license, including which are copyleft and how they are isolated,
+is maintained in docs/LICENSING.md.
+
+Summary of principal dependencies:
+  RDKit                    BSD-3-Clause
+  NumPy / pandas / SciPy   BSD-3-Clause
+  scikit-learn             BSD-3-Clause
+  requests                 Apache-2.0
+  AutoDock Vina / smina    Apache-2.0  (invoked as external processes; see below)
+  fpocket                  MIT         (invoked as an external process)
+
+No GPL- or LGPL-licensed library is imported into this codebase. Optional
+external programs are invoked as separate processes over files and never
+linked or imported, so their licenses do not extend to this work. See
+docs/LICENSING.md for the reasoning and for data-source licensing (ChEMBL is
+CC BY-SA 3.0 and is queried at runtime, never redistributed).
