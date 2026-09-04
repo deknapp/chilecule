@@ -54,6 +54,24 @@ class ScreeningMetrics:
         )
 
 
+def _pessimistic_order(
+    scores: np.ndarray, labels: np.ndarray, higher_is_better: bool
+) -> np.ndarray:
+    """Ranking order in which actives lose every tie.
+
+    Sorting on score alone leaves tie blocks in input order, and datasets are
+    routinely stored actives-first. A scoring function that returns a constant
+    would then appear to place every active at the top of the list and post a
+    maximal enrichment factor -- from a function carrying no information at all.
+
+    ``np.lexsort`` applies the LAST key first, so the primary sort is the score
+    and the tiebreak is the label, ascending, putting inactives ahead of actives
+    within each block.
+    """
+    primary = -scores if higher_is_better else scores
+    return np.lexsort((labels, primary))
+
+
 def _ranks_of_actives(scores: np.ndarray, labels: np.ndarray, higher_is_better: bool) -> np.ndarray:
     """1-indexed ranks of the actives under the given ranking.
 
@@ -63,7 +81,7 @@ def _ranks_of_actives(scores: np.ndarray, labels: np.ndarray, higher_is_better: 
     (identical docking scores, identical filter verdicts) and ranking actives
     first within a tie block can manufacture enrichment out of nothing.
     """
-    order = np.argsort(-scores if higher_is_better else scores, kind="mergesort")
+    order = _pessimistic_order(scores, labels, higher_is_better)
     ordered_labels = labels[order]
     ordered_scores = scores[order]
 
@@ -95,8 +113,10 @@ def enrichment_factor(
         return float("nan")
 
     cut = max(1, int(round(n * fraction)))
-    order = np.argsort(-scores if higher_is_better else scores, kind="mergesort")
-    found = int(labels[order][:cut].sum())
+    order = _pessimistic_order(
+        np.asarray(scores, dtype=float), np.asarray(labels, dtype=int), higher_is_better
+    )
+    found = int(np.asarray(labels, dtype=int)[order][:cut].sum())
     return (found / cut) / (n_actives / n)
 
 
@@ -193,5 +213,5 @@ def evaluate(
 def _hit_rate(scores: np.ndarray, labels: np.ndarray, fraction: float,
               higher_is_better: bool) -> float:
     cut = max(1, int(round(len(scores) * fraction)))
-    order = np.argsort(-scores if higher_is_better else scores, kind="mergesort")
+    order = _pessimistic_order(scores, labels, higher_is_better)
     return float(labels[order][:cut].mean())
