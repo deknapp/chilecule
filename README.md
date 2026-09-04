@@ -87,7 +87,58 @@ needs a GPU or a cluster — see [Status](#status).
 
 ## The workflows
 
-All four run on a laptop CPU in seconds to minutes. None require a GPU.
+Everything runs on a laptop CPU in seconds to minutes. Nothing needs a GPU.
+
+Most tools in this space are *target-in*: name a protein and they go looking.
+That is the rarer case. A medicinal chemist on a live program already knows the
+target — they arrive holding a molecule, a series, or a list somebody just sent
+them. So these come first.
+
+### `chilecule profile compounds.smi`
+
+The daily workhorse. For one compound or five hundred: standardization,
+properties, structural alerts, synthetic accessibility, a multi-parameter
+scorecard, plus the two questions that are most annoying to answer by hand —
+**has anyone made this** (exact InChIKey against ChEMBL and PubChem, with near
+neighbours) and **what else does it hit**.
+
+The scorecard reports the *limiting property*, not just a score. `0.42` tells a
+chemist nothing; "limited by cLogP at 5.8, target below 4" is a design
+instruction.
+
+For promiscuity it reports the **selectivity window** — log units between the
+best target and the median of the rest — because the raw target count is
+misleading. Erlotinib has 113 reported protein targets and is not promiscuous
+in any troubling sense; it is a kinase inhibitor that has been through kinome
+panels, and its 3.56-log window says so. A *flat* profile across many unrelated
+proteins is what actually indicates an aggregator.
+
+### `chilecule analogs '<SMILES>' --target EGFR`
+
+What should I make next? Proposes analogs built only from transformations
+medicinal chemists have already made against that target, mined from ChEMBL
+matched molecular pairs, each carrying its evidence:
+
+```
+CO[*:1] >> F[*:1]   attached to aromatic C
+n_pairs 11 · median +0.43 log · SD 0.31 · well-supported
+```
+
+Deliberately not generative. A model will happily propose a molecule nobody has
+made for a reason; a transformation observed eleven times, with its spread
+shown, is a proposal a chemist can argue with — and arguing with it is the
+point. When the parent falls outside the chemical space the evidence came from,
+the expected effect reads **no decision** rather than a number.
+
+### `chilecule series data.csv`
+
+For a congeneric series you already have data on: R-group decomposition into a
+substituent × position table, Free-Wilson additivity with a **cross-validated**
+R² (a one-hot model memorizes a small series completely, so the training fit
+always looks excellent), activity cliffs, and the question that gets asked too
+late — **is potency being bought with lipophilicity?** If potency correlates
+with cLogP across your series, that works right up until solubility, promiscuity
+and hERG arrive together in preclinical.
 
 ### `chilecule dossier EGFR`
 
@@ -125,8 +176,7 @@ The one that makes the others answerable. Checks the negative set for bias,
 then measures ROC-AUC, BEDROC, and enrichment factors against their ceilings,
 with a random baseline and a drug-likeness-only control.
 
-Runnable versions of all four, with real output, are in
-[`examples/`](examples/).
+Runnable versions, with real output, are in [`examples/`](examples/).
 
 ---
 
@@ -191,6 +241,46 @@ results — which pocket to target, when a filter is too aggressive, when a
 docking result is not credible. That boundary is deliberate: an agent that can
 hallucinate a logP is not useful, and an agent that cannot exercise judgment
 about a screening cascade is just a shell script with a chat interface.
+
+### What testing the agent actually found
+
+The tool layer has 89 unit tests. Running the *agent* over real tasks found two
+bugs that none of them caught, because every unit test checks a function against
+an input I chose.
+
+**It refused to claim a result it didn't have.** Asked to profile aspirin, the
+agent reported the properties from tools and then stopped:
+
+> *"No tool in this toolkit resolves a structure to a compound record — the
+> ChEMBL tools available take a target query, not a structure or InChIKey. So
+> this identification is mine, not a tool's. Treat that as unverified."*
+
+It was right. I had written `check_novelty` and tested it directly in Python,
+and never exposed it over MCP. Worse, the underlying cause was that I had
+appended the new `@mcp.tool` definitions *after* the `__main__` guard — so an
+in-process import registered all seventeen tools and running the server as a
+module silently served eleven.
+
+**It caught chemistry I would have shipped.** Asked to design analogs of a
+gefitinib-like hit, it inspected the output and flagged:
+
+> *"Three of its 22 proposals contain Ar–O–Br or Ar–O–Cl bonds, produced by
+> applying the fragment rule `C[*:1] >> Br[*:1]` to the methyl of a methoxy
+> group. A hypobromite ester is not a compound you can make. The Br version
+> claims 28 pairs and 'moderate' reliability — the highest pair count in the
+> list attached to a physically meaningless product."*
+
+Correct, and the fix was structural: a matched-pair transformation is only valid
+in the attachment environment it was mined from. Methyl-to-bromo is ordinary
+aromatic substitution on a ring carbon and absurd on an ether oxygen.
+Transformations now carry their attachment context as part of their identity,
+with a plausibility backstop behind it. Both bugs have regression tests.
+
+Neither of these is a story about the model being clever. They are a story about
+the tool layer being wrong in ways that only showed up when something tried to
+*use* it for a real task.
+
+---
 
 Exposing the tools over MCP means they work in Claude Code, Claude Desktop, or
 any MCP client — not only inside this project's own agent loop:

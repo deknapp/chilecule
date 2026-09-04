@@ -20,6 +20,31 @@ console = Console()
 DEFAULT_OUTPUT = Path("runs")
 
 
+def _read_compounds(compounds: list[str]) -> list[str]:
+    """Accept SMILES on the command line, or a path to a file of them.
+
+    Chemists have their compounds in a file far more often than on a clipboard,
+    and requiring them to paste 500 SMILES into a shell is a way of ensuring the
+    tool never gets used on a real list.
+    """
+    import pandas as pd
+
+    if len(compounds) == 1:
+        candidate = Path(compounds[0])
+        if candidate.exists():
+            if candidate.suffix.lower() == ".csv":
+                frame = pd.read_csv(candidate)
+                if "smiles" not in frame.columns:
+                    raise typer.BadParameter(f"{candidate} has no 'smiles' column")
+                return frame["smiles"].dropna().astype(str).tolist()
+            return [
+                line.split()[0]
+                for line in candidate.read_text().splitlines()
+                if line.strip() and not line.startswith("#")
+            ]
+    return compounds
+
+
 def _emit(report, out_dir: Path, save: bool) -> None:
     console.print(report.to_markdown())
     if save:
@@ -68,6 +93,65 @@ def doctor() -> None:
         console.print(
             "\n[dim]To enable docking:  micromamba install -c conda-forge smina fpocket[/dim]"
         )
+
+
+@app.command()
+def profile(
+    compounds: list[str] = typer.Argument(
+        ..., help="SMILES strings, or a path to a .smi/.csv file of them."
+    ),
+    scorecard: str = typer.Option("oral", help="Scorecard profile: oral or lead_like."),
+    offline: bool = typer.Option(False, help="Skip ChEMBL/PubChem lookups."),
+    out: Path = typer.Option(DEFAULT_OUTPUT),
+    save: bool = typer.Option(True),
+) -> None:
+    """Profile one compound or a list: properties, alerts, synthesis, novelty, promiscuity."""
+    from .workflows import profile as workflow
+
+    smiles_list = _read_compounds(compounds)
+    with console.status(f"Profiling {len(smiles_list)} compound(s)..."):
+        report = workflow.build(
+            smiles_list, check_databases=not offline, profile=scorecard
+        )
+    _emit(report, out, save)
+
+
+@app.command()
+def analogs(
+    parent: str = typer.Argument(..., help="SMILES of the hit to design around."),
+    target: str = typer.Option(..., "--target", "-t", help="Gene symbol or ChEMBL id, e.g. EGFR."),
+    max_analogs: int = typer.Option(30, help="Maximum analogs to propose."),
+    min_pairs: int = typer.Option(4, help="Minimum observations for a transformation to count."),
+    out: Path = typer.Option(DEFAULT_OUTPUT),
+    save: bool = typer.Option(True),
+) -> None:
+    """Propose what to make next, using transformations with a track record on this target."""
+    from .workflows import analogs as workflow
+
+    with console.status(f"Mining transformations from {target}..."):
+        report = workflow.build(
+            parent, target, max_analogs=max_analogs, min_occurrences=min_pairs
+        )
+    _emit(report, out, save)
+
+
+@app.command()
+def series(
+    data: Path = typer.Argument(..., help="CSV with a 'smiles' column and an activity column."),
+    activity: str = typer.Option("pchembl", help="Name of the activity column."),
+    out: Path = typer.Option(DEFAULT_OUTPUT),
+    save: bool = typer.Option(True),
+) -> None:
+    """Analyse a congeneric series: R-group SAR, Free-Wilson, cliffs, efficiency trends."""
+    import pandas as pd
+
+    from .workflows import series as workflow
+
+    frame = pd.read_csv(data)
+    console.print(f"Read {len(frame)} rows from {data}")
+    with console.status("Analysing series..."):
+        report = workflow.build(frame, activity_col=activity, subject=data.stem)
+    _emit(report, out, save)
 
 
 @app.command()
