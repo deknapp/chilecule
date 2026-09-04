@@ -15,9 +15,9 @@ this target" will produce something fluent and unfalsifiable. The prompt below
 constrains it toward the behaviour a good computational chemist has: state
 uncertainty, name controls, refuse to over-read a weak signal.
 
-Requires ``pip install 'chilecule[agent]'`` and an Anthropic credential -- an
-``ANTHROPIC_API_KEY``, an ``ant auth login`` profile, or AWS credentials with
-``CLAUDE_CODE_USE_BEDROCK=1``. Run ``chilecule doctor`` to see what is resolved.
+Requires ``pip install 'chilecule[agent]'`` and an Anthropic credential --
+either an ``ANTHROPIC_API_KEY`` or an ``ant auth login`` profile. Run
+``chilecule doctor`` to see what is resolved.
 """
 
 from __future__ import annotations

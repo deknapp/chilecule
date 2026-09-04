@@ -79,10 +79,9 @@ found:
 |---|---|
 | Nothing | Every workflow below. All of them run on laptop CPU. |
 | `ANTHROPIC_API_KEY`, or `ant auth login` | Agent-driven workflows |
-| AWS credentials + `CLAUDE_CODE_USE_BEDROCK=1` | Agent-driven workflows via Bedrock |
 
-`chilecule doctor` tells you which tier you are in. Anything requiring a GPU is
-scaffolded but not implemented — see [Status](#status).
+`chilecule doctor` tells you what is available. There is nothing here that
+needs a GPU or a cluster — see [Status](#status).
 
 ---
 
@@ -172,6 +171,7 @@ Every curated frame carries its ChEMBL release for CC BY-SA attribution.
 tools/          Pure functions over molecules and structures. No LLM anywhere.
   chem          standardization, descriptors, ligand & lipophilic efficiency
   alerts        PAINS / Brenk / NIH / ZINC, annotated with severity — never deleted
+  lookup        novelty (ChEMBL/PubChem) and promiscuity across reported targets
   chembl        retrieval + curation with a full audit trail
   sar           scaffolds, matched molecular pairs, activity cliffs
   structure     PDB retrieval, structure ranking, receptor prep, docking boxes
@@ -179,9 +179,9 @@ tools/          Pure functions over molecules and structures. No LLM anywhere.
   docking       smina / vina / gnina, plus the redocking control
 
 bench/          metrics (EF, BEDROC, ROC-AUC) and decoy bias detection
-workflows/      the four pipelines above, each returning one Report
-runners/        LocalRunner (complete) and AWSBatchRunner (scaffold)
+workflows/      the pipelines above, each returning one Report
 mcp/            the tool layer exposed over Model Context Protocol
+parallel.py     pmap(). The entire execution layer.
 ```
 
 **The tool layer contains no LLM calls.** Every scientific function is
@@ -257,11 +257,10 @@ tool layer, the validation harness, the MCP server, the local runner. 92 tests,
 of which 81 run with no network and no external binaries; the rest exercise
 live ChEMBL, PDBe, RCSB, smina and fpocket.
 
-**Scaffolded, not implemented:** the AWS Batch runner. The `Runner` interface
-is fixed and documented, and `docs/ARCHITECTURE.md` describes what building the
-cloud tier involves. It is a scaffold on purpose — every shipped workflow is
-designed to finish on laptop CPU, and a portfolio repository that leaves
-billable infrastructure running is worse than one with no cloud tier at all.
+**Deliberately absent:** any cloud or GPU tier. An earlier version carried a
+scaffolded AWS Batch runner behind a `Runner` protocol; it was deleted. Every
+workflow here finishes on a laptop CPU, so the abstraction had exactly one
+implementation and was making a claim about generality the code did not cash.
 
 **Not attempted:** free energy perturbation, retrosynthesis, generative design,
 and structure prediction. All are interesting; none run on a laptop.

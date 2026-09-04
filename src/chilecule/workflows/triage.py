@@ -24,8 +24,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from ..runners.base import DESCRIPTOR, DOCKING_POSE, estimate_cost
-from ..runners.local import LocalRunner
+from ..parallel import pmap
 from ..tools.alerts import screen
 from ..tools.chem import properties, standardize
 from ..tools.docking import DockingUnavailable, dock, find_program, redock_control
@@ -78,7 +77,6 @@ def build(
     dock_top_n: int = 25,
     exhaustiveness: int = 8,
     run_redock_control: bool = True,
-    runner: LocalRunner | None = None,
 ) -> Report:
     """Filter a library and optionally dock the survivors.
 
@@ -90,7 +88,6 @@ def build(
     stated limitation beats no result.
     """
     limits = {**DEFAULT_LIMITS, **(limits or {})}
-    runner = runner or LocalRunner()
     report = Report(workflow="Hit triage", subject=f"{pdb_id or 'ligand-based'}")
 
     smiles_in = (
@@ -99,7 +96,7 @@ def build(
     rejections: list[dict] = []
 
     # ------------------------------------------------- Stage 1: structures
-    standardized = runner.map(standardize, smiles_in, DESCRIPTOR)
+    standardized = pmap(standardize, smiles_in)
     survivors = []
     for original, result in zip(smiles_in, standardized, strict=True):
         if result.ok:
@@ -199,11 +196,7 @@ def build(
         )
         if receptor is not None and resolved_box is not None:
             shortlist = stage3[:dock_top_n]
-            projection = estimate_cost(len(shortlist), DOCKING_POSE)
-            log.info(
-                "docking %d compounds (~%s CPU-hours)",
-                len(shortlist), projection["cpu_hours"],
-            )
+            log.info("docking %d compounds", len(shortlist))
 
             for smiles in shortlist:
                 try:

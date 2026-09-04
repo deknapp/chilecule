@@ -29,16 +29,13 @@ it is what makes each half do the thing it is actually good at.
                              │  MCP  (mcp/server.py)
 ┌────────────────────────────┴────────────────────────────┐
 │  Tool layer                deterministic, no LLM        │
-│  tools/   chem  alerts  chembl  sar  structure          │
-│           pockets  docking                              │
+│  tools/   chem  alerts  lookup  chembl  sar             │
+│           structure  pockets  docking                   │
 │  bench/   metrics  decoys                               │
-└────────────────────────────┬────────────────────────────┘
-                             │  Runner
-┌────────────────────────────┴────────────────────────────┐
-│  Execution      LocalRunner (complete)                  │
-│                 AWSBatchRunner (scaffold)               │
 └─────────────────────────────────────────────────────────┘
 ```
+
+Everything runs on a laptop CPU. There is no cluster tier and no GPU tier.
 
 ---
 
@@ -94,76 +91,26 @@ load-bearing one.
 
 ---
 
-## The Runner abstraction
+## Execution
 
-Every expensive step declares a `ResourceProfile` — cores, memory, expected
-seconds per item, whether it needs a GPU — and hands work to a `Runner`. The
-workflow never knows where execution happened.
+`chilecule/parallel.py` contains one function, `pmap`. That is the whole
+execution layer.
 
-```python
-runner.map(dock_one, ligands, DOCKING_POSE)
-```
+An earlier version of this project had a `Runner` protocol with a local
+implementation and a scaffolded AWS Batch backend. It has been removed. Every
+workflow here is designed to finish on a laptop CPU, so there was exactly one
+implementation, and an abstraction over one implementation is a claim about
+generality that the code does not cash. Deleting it removed about 200 lines
+and a `boto3` dependency without changing what the project can do.
 
-The point is that scaling out must not require rewriting the science. Docking
-500 ligands on a laptop is the same code that would dock 5 million on a cluster;
-only the runner changes.
+The only judgement left is thread pool versus process pool: RDKit releases the
+GIL for much of its C++ work, so RDKit-heavy and I/O-shaped work parallelizes
+on threads, while Python-level per-molecule loops need processes.
 
-`LocalRunner` is complete. It picks a process pool for CPU-bound profiles and a
-thread pool otherwise, and runs small batches serially because pool startup
-costs more than the work below about 32 items.
+If GPU-scale work is ever wanted here — structure prediction, free energy
+perturbation — the right move is to add it when there is a workflow that needs
+it, not to keep an empty backend around in anticipation.
 
----
-
-## The cloud tier is a scaffold, on purpose
-
-`AWSBatchRunner` defines the interface and raises `NotImplementedError` from
-every execution method. `available()` returns `False` unconditionally, and
-`chilecule doctor` reports "AWS credentials detected" separately from "cloud
-tier works" — conflating those would tell a user their setup is fine when the
-backend does not exist.
-
-This is a deliberate stopping point rather than an unfinished corner. Every
-shipped workflow is designed to complete on laptop CPU, so nothing needs it;
-and a portfolio repository that leaves billable infrastructure running is worse
-than one with no cloud tier at all.
-
-### What implementing it would involve
-
-**1. A container image built from this project's own environment.** Not a
-separately maintained cloud Dockerfile — two dependency specifications drift
-apart within a month, and the resulting "works locally, fails in the cloud" bug
-is expensive and boring. One source of truth or none.
-
-**2. Infrastructure as code.** An S3 bucket for inputs and results, an ECR
-repository, a Batch compute environment on Spot, a job queue, and one job
-definition per resource tier. A single CloudFormation stack created by
-`chilecule cloud init` and destroyed by `chilecule cloud destroy`. Teardown is
-not optional.
-
-**3. A cost gate before submission.** `estimate_cost()` already produces the
-projection; the runner shows it and requires confirmation above a threshold.
-Spot instances by default, with a hard budget cap on the compute environment.
-Nothing that spends money should do so without saying how much first.
-
-**4. Content-addressed results.** S3 keys derived from a hash of (input, tool
-version, parameters), so re-running an unchanged job is a cache lookup rather
-than a second charge. Docking is deterministic given a seed, which makes this
-straightforwardly correct.
-
-### Credentials
-
-Not handled by this project, deliberately. Botocore's resolution chain —
-environment, shared config profiles, SSO, container and instance roles —
-already does this correctly and supports short-lived credentials. The Anthropic
-SDK's chain does the same for model access, including OAuth profiles from
-`ant auth login`. A project that invents its own credential file is a project
-that will eventually leak one, and it would drop SSO and instance-role support
-in exchange.
-
-`chilecule/config.py` therefore only *detects* what is present, and reports
-presence without ever printing a value. Note also that AWS credentials can
-serve both roles at once: Claude runs on Bedrock, so a user with AWS
-credentials has both the compute and the model behind one key.
 
 ---
 

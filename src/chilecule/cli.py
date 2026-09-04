@@ -38,9 +38,8 @@ def doctor() -> None:
     console.print(Panel.fit(f"chilecule environment  ·  Python {env.python_version}"))
 
     table = Table("Component", "Status", "Detail", box=None, pad_edge=False)
-    for capability in (env.anthropic, env.aws):
-        mark = "[green]yes[/green]" if capability.available else "[yellow]no[/yellow]"
-        table.add_row(capability.name, mark, capability.detail)
+    mark = "[green]yes[/green]" if env.anthropic.available else "[yellow]no[/yellow]"
+    table.add_row(env.anthropic.name, mark, env.anthropic.detail)
     for name, capability in env.packages.items():
         mark = "[green]yes[/green]" if capability.available else "[red]no[/red]"
         table.add_row(f"py:{name}", mark, capability.detail)
@@ -51,10 +50,9 @@ def doctor() -> None:
 
     console.print("\n[bold]Workflow tiers[/bold]")
     descriptions = {
-        "data-and-sar": "dossier, sar, validate  (needs RDKit only)",
+        "cheminformatics": "profile, analogs, series, dossier, sar, validate  (RDKit only)",
         "structure-based": "triage with docking, pockets  (needs a docking program)",
         "agent-driven": "agent-run workflows  (needs an Anthropic credential)",
-        "cloud-burst": "GPU / large-scale  (scaffold only -- not implemented)",
     }
     for tier, ready in env.tiers.items():
         # Pad the plain word, then wrap it in markup. Padding the marked-up
@@ -62,7 +60,7 @@ def doctor() -> None:
         word = "ready" if ready else "unavailable"
         colour = "green" if ready else "yellow"
         console.print(
-            f"  {tier:<18} [{colour}]{word}[/{colour}]{' ' * (13 - len(word))} "
+            f"  {tier:<17} [{colour}]{word}[/{colour}]{' ' * (13 - len(word))} "
             f"{descriptions[tier]}"
         )
 
