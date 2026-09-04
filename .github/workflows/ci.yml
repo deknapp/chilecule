@@ -5,7 +5,7 @@ on:
     branches: [main]
   pull_request:
   # Weekly, because the integration tests exist to catch upstream changes --
-  # ChEMBL renaming a field or PDBe changing a response shape breaks this
+  # ChEMBL renaming a field or PDBe altering a response shape breaks this
   # project without anyone touching this repository.
   schedule:
     - cron: "0 6 * * 1"
@@ -20,22 +20,31 @@ jobs:
         python: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
+      # setup-python before setup-uv: the runner's own interpreter is
+      # externally managed (PEP 668), so `uv pip install --system` against it
+      # fails outright, and it would ignore the matrix version anyway.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
       - uses: astral-sh/setup-uv@v5
       - name: Install
         run: uv pip install --system -e ".[mcp,dev]"
       - name: Lint
-        run: ruff check src tests
+        run: ruff check src tests examples evals
       - name: Test
         run: pytest -q -m "not network and not binary" --cov=chilecule --cov-report=term-missing
 
   integration:
     name: Integration (live services + docking binaries)
     runs-on: ubuntu-latest
-    # Only on main and the weekly run: these hit EBI and RCSB, and hammering
-    # public infrastructure from every pull request is bad manners.
+    # Only on main and the weekly run. These hit EMBL-EBI and RCSB, and
+    # hammering public infrastructure from every pull request is bad manners.
     if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: astral-sh/setup-uv@v5
       - uses: mamba-org/setup-micromamba@v2
         with:
@@ -57,6 +66,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: astral-sh/setup-uv@v5
       - name: Install
         run: |
@@ -64,13 +76,12 @@ jobs:
           uv pip install --system pip-licenses
       - name: Fail on any copyleft library in the import graph
         run: |
-          pip-licenses --format=csv --with-system > licenses.csv
+          pip-licenses --format=csv > licenses.csv
           cat licenses.csv
           # The core must never import a GPL or LGPL library. External docking
           # programs are invoked as subprocesses and are not in this graph;
-          # see docs/LICENSING.md for why that boundary is the load-bearing one.
-          if grep -Ei '(^|,)"?(GNU General Public|GPL|LGPL|AGPL)' licenses.csv \
-             | grep -vi 'lgpl-compatible'; then
+          # docs/LICENSING.md explains why that boundary is the load-bearing one.
+          if grep -Ei '"(GNU General Public|GNU Lesser|GPL|LGPL|AGPL)' licenses.csv; then
             echo "::error::A copyleft-licensed library entered the import graph."
             exit 1
           fi
