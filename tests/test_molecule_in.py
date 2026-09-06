@@ -207,3 +207,78 @@ def test_ignore_stereo_is_opt_in():
     parent = "CCCN(CCC)[C@H]1CCc2c(O)cccc2C1"
     assert apply_transformation(parent, swap) == []
     assert apply_transformation(parent, swap, ignore_stereo=True)
+
+
+# --- the plausibility backstop, broadened -----------------------------------
+
+# Real drugs, several of them bridged, sugar-bearing or otherwise awkward. A
+# flag on any of these is a false positive, and a false positive here is worse
+# than a miss: this filter throws away design proposals, so over-rejecting
+# quietly removes real chemistry from the output.
+REAL_DRUGS = {
+    "aspirin": "CC(=O)Oc1ccccc1C(=O)O",
+    "morphine": "CN1CC[C@]23c4c5ccc(O)c4O[C@H]2[C@@H](O)C=C[C@H]3[C@H]1C5",
+    "atropine": "CN1[C@H]2CC[C@@H]1C[C@@H](C2)OC(=O)C(CO)c1ccccc1",
+    "cocaine": "COC(=O)[C@H]1[C@@H](OC(=O)c2ccccc2)C[C@@H]3CC[C@H]1N3C",
+    "quinine": "COc1ccc2nccc([C@@H](O)[C@H]3C[C@@H]4CCN3C[C@@H]4C=C)c2c1",
+    "artemisinin": "C[C@@H]1CC[C@H]2[C@@H](C)C(=O)O[C@@H]3O[C@]4(C)CC[C@@H]1[C@@]23OO4",
+    "camphor": "CC1(C)[C@@H]2CC[C@@]1(C)C(=O)C2",
+    "glucose": "OC[C@H]1O[C@@H](O)[C@H](O)[C@@H](O)[C@@H]1O",
+    "sucrose": "OC[C@H]1O[C@H](O[C@]2(CO)O[C@H](CO)[C@@H](O)[C@@H]2O)[C@H](O)[C@@H](O)[C@@H]1O",
+    "penicillin G": "CC1(C)S[C@@H]2[C@H](NC(=O)Cc3ccccc3)C(=O)N2[C@H]1C(=O)O",
+    "cholesterol": "C[C@H](CCCC(C)C)[C@H]1CC[C@H]2[C@@H]3CC=C4C[C@@H](O)CC[C@]4(C)[C@H]3CC[C@]12C",
+    "estradiol": "C[C@]12CC[C@H]3[C@@H](CCc4cc(O)ccc34)[C@@H]1CC[C@@H]2O",
+    "imatinib": "Cc1ccc(NC(=O)c2ccc(CN3CCN(C)CC3)cc2)cc1Nc1nccc(-c2cccnc2)n1",
+    "gefitinib": "COc1cc2ncnc(Nc3ccc(F)c(Cl)c3)c2cc1OCCCN1CCOCC1",
+    "camptothecin": "CCC1(O)C(=O)OCC2=C1C=C1N(C2=O)Cc2cc3ccccc3nc21",
+    "adamantane": "C1C2CC3CC1CC(C2)C3",
+    "caffeine": "Cn1c(=O)c2c(ncn2C)n(C)c1=O",
+    "ascorbic acid": "OC[C@H](O)[C@H]1OC(=O)C(O)=C1O",
+}
+
+
+@pytest.mark.parametrize("name,smiles", sorted(REAL_DRUGS.items()))
+def test_real_drugs_are_not_rejected(name, smiles):
+    assert implausibility(smiles) is None, name
+
+
+def test_glucose_is_a_hemiketal_and_must_survive():
+    """The cyclic/acyclic distinction is the whole difficulty of this rule.
+
+    A hemiketal filter written without it rejects every sugar.
+    """
+    assert implausibility(REAL_DRUGS["glucose"]) is None
+    assert implausibility("CCOC(C)(O)CC") == "acyclic hemiketal or hemiacetal"
+
+
+@pytest.mark.parametrize("smiles,expected", [
+    ("CCC(O)(O)CC", "geminal diol (hydrate of a ketone)"),
+    ("CCOC(C)(O)CC", "acyclic hemiketal or hemiacetal"),
+    ("CCC(O)(N)CC", "carbinolamine (acyclic)"),
+    ("CCC(O)(Cl)CC", "geminal halohydrin"),
+    ("CCNC(=O)O", "carbamic acid (decarboxylates)"),
+])
+def test_unstable_centres_are_named(smiles, expected):
+    assert implausibility(smiles) == expected
+
+
+def test_anti_bredt_alkene_is_caught_by_ring_size():
+    """Bredt's rule is about ring size, not about the bond alone.
+
+    bicyclo[2.2.1]hept-1-ene cannot be made; bicyclo[3.3.1]non-1-ene is a
+    stable, isolated compound. The check has to tell those apart, which is why
+    it is ring analysis rather than a SMARTS.
+    """
+    caught = implausibility("C1CC2=CCC1C2")
+    assert caught is not None and "anti-Bredt" in caught
+    assert implausibility("C1CCC2=C(C1)CCC2") is None
+
+
+def test_ring_fusion_is_not_a_bridgehead():
+    """Two rings sharing one bond are fused, and Bredt's rule says nothing.
+
+    Treating a fusion atom as a bridgehead would reject most of the steroid and
+    terpene literature -- cholesterol is the case in point.
+    """
+    assert implausibility(REAL_DRUGS["cholesterol"]) is None
+    assert implausibility("C1CCC2=C(C1)CCCC2") is None   # octalin, fused alkene

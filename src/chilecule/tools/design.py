@@ -47,7 +47,25 @@ IMPLAUSIBLE_PATTERNS: tuple[tuple[str, str], ...] = (
     ("[NX3][Cl,Br,I]", "N-halamine"),
     ("[OX2][OX2][OX2]", "trioxide"),
     ("[NX3][NX3][NX3]", "triazane"),
+    # Centres that exist only in equilibrium and collapse on isolation. All
+    # four are written with `!@` (acyclic) bonds on purpose: the cyclic forms
+    # are ordinary chemistry, and a filter that could not tell them apart would
+    # reject every sugar. Glucose is a cyclic hemiketal.
+    ("[CX4;!$(C=O)]([OX2H])!@[OX2H]", "geminal diol (hydrate of a ketone)"),
+    ("[CX4;!$(C=O)]([OX2H])!@[OX2][CX4]", "acyclic hemiketal or hemiacetal"),
+    ("[CX4;!$(C=O)]([OX2H])!@[NX3;!$(N[!#6])]", "carbinolamine (acyclic)"),
+    ("[CX4]([OX2H])[Cl,Br,I]", "geminal halohydrin"),
+    ("[NX3][CX3](=O)[OX2H]", "carbamic acid (decarboxylates)"),
 )
+
+#: Bredt's rule. A bridgehead alkene is not isolable in a small bridged ring
+#: system; it becomes ordinary once the system is big enough to accommodate the
+#: twist. Anti-Bredt olefins are isolable from about eight skeletal atoms
+#: upward -- bicyclo[3.3.1]non-1-ene is a stable compound, norbornene with the
+#: double bond moved to a bridgehead is not. The threshold is deliberately
+#: permissive: this is a backstop, and rejecting a real scaffold is worse than
+#: passing a strained one to the chemist who reads the output.
+BREDT_MIN_RING_ATOMS = 8
 
 
 @lru_cache(maxsize=1)
@@ -55,6 +73,57 @@ def _implausible_queries() -> tuple[tuple[object, str], ...]:
     return tuple(
         (Chem.MolFromSmarts(pattern), label) for pattern, label in IMPLAUSIBLE_PATTERNS
     )
+
+
+def _bridged_systems(mol) -> list[tuple[set[int], set[int]]]:
+    """Bridged ring systems, as (bridgehead atoms, all atoms in the system).
+
+    Two rings sharing exactly one bond are *fused* -- decalin, indane, every
+    steroid -- and Bredt's rule does not speak to them. Two rings sharing two
+    or more atoms in any other arrangement are *bridged*, and their shared
+    atoms are the bridgeheads. Distinguishing the two is the whole difficulty:
+    a check that treated a ring fusion as a bridgehead would reject most of the
+    steroid and terpene literature.
+    """
+    rings = [set(ring) for ring in mol.GetRingInfo().AtomRings()]
+    systems: list[tuple[set[int], set[int]]] = []
+    for i, first in enumerate(rings):
+        for second in rings[i + 1:]:
+            shared = first & second
+            if len(shared) < 2:
+                continue  # spiro, or not touching at all
+            shared_bonds = sum(
+                1 for bond in mol.GetBonds()
+                if bond.GetBeginAtomIdx() in shared and bond.GetEndAtomIdx() in shared
+            )
+            if len(shared) == 2 and shared_bonds == 1:
+                continue  # ortho-fused, not bridged
+            systems.append((shared, first | second))
+    return systems
+
+
+def anti_bredt(mol) -> str | None:
+    """Name a bridgehead double bond too strained to exist, or None.
+
+    Checked in code rather than SMARTS because the question is not "is there a
+    double bond at a bridgehead" but "is the ring system small enough that the
+    bridgehead alkene cannot be made", and ring size is not something SMARTS
+    expresses well.
+    """
+    for bond in mol.GetBonds():
+        if bond.GetBondType() != Chem.BondType.DOUBLE or bond.GetIsAromatic():
+            continue
+        if not bond.IsInRing():
+            continue
+        begin, end = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+        if mol.GetAtomWithIdx(begin).GetIsAromatic() or mol.GetAtomWithIdx(end).GetIsAromatic():
+            continue
+        for bridgeheads, system in _bridged_systems(mol):
+            if (begin in bridgeheads or end in bridgeheads) and \
+                    len(system) < BREDT_MIN_RING_ATOMS:
+                return (f"anti-Bredt alkene (bridgehead double bond in a "
+                        f"{len(system)}-atom bridged system)")
+    return None
 
 
 def implausibility(smiles: str) -> str | None:
@@ -65,7 +134,7 @@ def implausibility(smiles: str) -> str | None:
     for query, label in _implausible_queries():
         if query is not None and mol.HasSubstructMatch(query):
             return label
-    return None
+    return anti_bredt(mol)
 
 log = logging.getLogger(__name__)
 
