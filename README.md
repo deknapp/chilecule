@@ -11,6 +11,16 @@ tell you when the results are meaningless.
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 [![Dependencies](https://img.shields.io/badge/deps-license--audited-brightgreen.svg)](docs/LICENSING.md)
 
+![chilecule profiling aspirin: properties, a Brenk alert reported as an
+annotation rather than a verdict, synthetic accessibility, and a selectivity
+read that distinguishes a clear primary target from promiscuity](docs/profile.png)
+
+Real output from `chilecule profile`, not a mock-up. Note what it does with the
+structural alert: aspirin trips a Brenk filter, and the tool says so *and* says
+that roughly 5% of approved drugs match a PAINS pattern, because an alert is an
+annotation and not a verdict. Most of the value in this repo is in sentences
+like that one.
+
 ---
 
 ## Why another one of these
