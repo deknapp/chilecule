@@ -201,6 +201,43 @@ The one that makes the others answerable. Checks the negative set for bias,
 then measures ROC-AUC, BEDROC, and enrichment factors against their ceilings,
 with a random baseline and a drug-likeness-only control.
 
+#### `chilecule validate EGFR --with-agent`
+
+Enters the agent as a method in that same table, rather than describing it in
+prose beside it.
+
+The distinction matters more than it sounds. It is easy to show that an agent
+*behaves* well — calls its tools, hedges appropriately, refuses to overstate a
+docking score. This repository does exactly that, below, and it is an argument
+from style. It does not answer whether the agent's ranking would have found the
+actives.
+
+So the agent is handed what the similarity baseline is handed — the same
+reference actives, the same candidates, no labels — and its scores go through
+the identical replicate and metric path. The constraints that make the number
+mean something:
+
+- Candidates carry opaque, fixed-width IDs, so nothing about a molecule's
+  provenance can leak its activity.
+- Batches are shuffled with a seeded RNG: neither position nor batch membership
+  carries signal, and a run repeats exactly.
+- **Omissions sink.** A candidate the agent skips or malforms ranks below every
+  candidate it did score, and the coverage is printed next to the result. An
+  agent must not be able to improve its enrichment by declining to answer on
+  whatever it found hard.
+- `--max-pool` caps the evaluation set *before any method is scored*, never only
+  the agent's — capping one row's pool would make the rows incomparable.
+
+The expected outcome is that the agent loses to a millisecond of Tanimoto
+arithmetic, and the interpretation section says so in whichever direction it
+falls. A benchmark that cannot produce that row is not measuring anything.
+
+> **No agent row has been published here yet.** The harness is tested (36 tests,
+> including an oracle that must score 1.0 and an inverted ranker that must
+> fail), but `--with-agent` makes metered API calls and has not been run at
+> scale. When it is, the number goes here whichever way it comes out. See
+> [Status](#status).
+
 Runnable versions, with real output, are in [`examples/`](examples/).
 
 ---
@@ -386,9 +423,16 @@ DrugBank is CC BY-NC and is deliberately not wired in.
 This is a working v0.1, not a finished product. What is honest to say about it:
 
 **Implemented and verified against real data:** all four workflows, the full
-tool layer, the validation harness, the MCP server, the local runner. 92 tests,
-of which 81 run with no network and no external binaries; the rest exercise
-live ChEMBL, PDBe, RCSB, smina and fpocket.
+tool layer, the validation harness, the MCP server, the local runner. 209 tests,
+of which the large majority run with no network and no external binaries; the
+rest exercise live ChEMBL, PDBe, RCSB, smina and fpocket.
+
+**Built but not yet run at scale:** the agent's row in the retrospective
+benchmark (`validate --with-agent`). The harness and its fairness constraints
+are tested, but scoring the agent over a real pool costs metered API calls and
+that run has not happened. Until it does there is no agent number here, and
+there will not be an invented one — the same rule that kept this repository's
+enrichment tables empty until they could be measured.
 
 **Deliberately absent:** any cloud or GPU tier. An earlier version carried a
 scaffolded AWS Batch runner behind a `Runner` protocol; it was deleted. Every
