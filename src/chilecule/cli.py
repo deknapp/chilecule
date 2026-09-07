@@ -225,11 +225,53 @@ def validate(
     max_records: int = typer.Option(8000),
     active_threshold: float = typer.Option(7.0, help="pChEMBL cutoff defining an active."),
     replicates: int = typer.Option(20, help="Subsampling replicates for the metrics."),
+    with_agent: bool = typer.Option(
+        False,
+        "--with-agent",
+        help="Also score the agent on the same pool. Makes real API calls and costs money.",
+    ),
+    max_pool: int | None = typer.Option(
+        None, help="Cap the evaluation pool. Applies to every method, not just the agent."
+    ),
+    agent_batch: int = typer.Option(40, help="Candidates per agent call."),
     out: Path = typer.Option(DEFAULT_OUTPUT),
     save: bool = typer.Option(True),
 ) -> None:
-    """Measure whether a ranking method enriches for known actives on this target."""
+    """Measure whether a ranking method enriches for known actives on this target.
+
+    With ``--with-agent`` the agent is entered as a method alongside the
+    baselines: same reference actives, same candidates, no labels, same metrics.
+    It is the only honest way to answer whether the agent's ranking is worth
+    more than a Tanimoto search, and it is allowed to lose.
+    """
     from .workflows import validate as workflow
+
+    ranker = None
+    if with_agent:
+        import asyncio
+
+        from .bench.agent_ranker import rank_with_agent, scores_to_array
+
+        if max_pool is None:
+            max_pool = 200
+            console.print(
+                "[yellow]--with-agent: capping the evaluation pool at 200 compounds. "
+                "Pass --max-pool to change it.[/yellow]"
+            )
+
+        def ranker(candidates: list[str], reference: list[str]) -> dict[str, float]:
+            ranking, ids = asyncio.run(
+                rank_with_agent(
+                    candidates, reference, target=target, batch_size=agent_batch
+                )
+            )
+            console.print(f"[dim]{ranking.summary()}[/dim]")
+            array = scores_to_array(ranking, ids)
+            return {
+                smiles: float(score)
+                for smiles, score, cid in zip(candidates, array, ids, strict=True)
+                if cid in ranking.scores
+            }
 
     with console.status(f"Validating on {target}..."):
         report = workflow.build(
@@ -237,6 +279,8 @@ def validate(
             max_activity_records=max_records,
             active_threshold=active_threshold,
             n_replicates=replicates,
+            agent_ranker=ranker,
+            max_pool=max_pool,
         )
     _emit(report, out, save)
 

@@ -22,6 +22,8 @@ prospectively because it was separating molecular weight all along.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 import pandas as pd
 
@@ -33,6 +35,12 @@ from ..tools.sar import fingerprint
 from .report import Report, Section, base_provenance
 
 ACTIVE_THRESHOLD = 7.0  # pChEMBL >= 7 is 100 nM or better
+
+#: Called with ``(candidate_smiles, reference_actives)``, returns ``{smiles: score}``.
+#: Higher is better, and a SMILES may be omitted -- omissions are ranked last.
+AgentRanker = Callable[[list[str], list[str]], dict[str, float]]
+
+AGENT_METHOD = "agent (Claude, tool-using)"
 
 
 def similarity_to_actives(query_smiles: str, reference_smiles: list[str]) -> float:
@@ -64,8 +72,23 @@ def build(
     target_active_fraction: float = 0.02,
     n_replicates: int = 20,
     client: ChemblClient | None = None,
+    agent_ranker: AgentRanker | None = None,
+    max_pool: int | None = None,
 ) -> Report:
-    """Validate a ligand-based ranking on a target's own experimental data."""
+    """Validate a ligand-based ranking on a target's own experimental data.
+
+    ``agent_ranker`` optionally puts the agent on the same benchmark. It is
+    called once with ``(candidate_smiles, reference_actives)`` and returns a
+    score per SMILES; the result is then carried through the identical replicate
+    and metric path as the baselines, so the comparison is like-for-like. See
+    :mod:`chilecule.bench.agent_ranker` for the fairness constraints.
+
+    ``max_pool`` caps the evaluation pool, stratified by label. It exists for
+    the agent path, where scoring is metered -- but the cap is applied *before
+    any method is scored*, so every method still sees exactly the same
+    compounds. Capping only the agent's pool would produce a table whose rows
+    were not comparable.
+    """
     client = client or ChemblClient()
     report = Report(workflow="Retrospective validation", subject=target)
 
@@ -146,11 +169,52 @@ def build(
     reference = actives.head(n_reference_actives)["smiles"].tolist()
     held_out = pool[~pool["smiles"].isin(reference)].reset_index(drop=True)
 
+    # Cap the pool before scoring anything, stratified so the label balance is
+    # preserved. Applied to every method or to none -- see build()'s docstring.
+    if max_pool is not None and len(held_out) > max_pool:
+        keep_fraction = max_pool / len(held_out)
+        strata = [
+            group.sample(n=max(1, int(round(len(group) * keep_fraction))), random_state=0)
+            for _, group in held_out.groupby("label")
+        ]
+        held_out = pd.concat(strata, ignore_index=True)
+        report.warn(
+            f"Evaluation pool capped at {len(held_out)} compounds (from {len(pool)}), "
+            "sampled within each label so the active/inactive balance is unchanged. "
+            "Every method below was scored on this same capped pool, so the rows remain "
+            "comparable -- but the error bars are wider than an uncapped run would give."
+        )
+
     held_out["similarity_score"] = [
         similarity_to_actives(s, reference) for s in held_out["smiles"]
     ]
     profile = [properties(s) for s in held_out["smiles"]]
     held_out["qed_score"] = [p.qed if p else 0.0 for p in profile]
+
+    agent_ranking_meta: dict | None = None
+    if agent_ranker is not None:
+        candidate_smiles = held_out["smiles"].tolist()
+        agent_scores = agent_ranker(candidate_smiles, reference)
+
+        # Omissions rank below every scored compound rather than being dropped.
+        # An agent that declines on the candidates it finds hard must not be
+        # rewarded with a metric computed only over the easy ones.
+        floor = min(agent_scores.values(), default=0.0) - 1.0
+        held_out["agent_score"] = [agent_scores.get(s, floor) for s in candidate_smiles]
+
+        n_scored = sum(1 for s in candidate_smiles if s in agent_scores)
+        agent_ranking_meta = {
+            "n_candidates": len(candidate_smiles),
+            "n_scored": n_scored,
+            "coverage": n_scored / len(candidate_smiles) if candidate_smiles else 0.0,
+        }
+        if n_scored < len(candidate_smiles):
+            report.warn(
+                f"The agent scored {n_scored} of {len(candidate_smiles)} candidates. "
+                f"The {len(candidate_smiles) - n_scored} it did not score are ranked "
+                "below every compound it did, which is the conservative treatment: a "
+                "method cannot improve its enrichment by declining to answer."
+            )
 
     # Subsample to a realistic active fraction.
     #
@@ -175,6 +239,8 @@ def build(
         "QED (drug-likeness only)",
         "random ordering",
     ]
+    if agent_ranking_meta is not None:
+        method_names.insert(1, AGENT_METHOD)
     collected: dict[str, list[dict[str, float]]] = {name: [] for name in method_names}
 
     for replicate in range(n_replicates):
@@ -184,10 +250,13 @@ def build(
         labels = subset["label"].to_numpy()
 
         scores_by_method = {
-            method_names[0]: subset["similarity_score"].to_numpy(),
-            method_names[1]: subset["qed_score"].to_numpy(),
-            method_names[2]: rng.random(len(subset)),
+            f"ECFP4 similarity to {n_reference_actives} known actives":
+                subset["similarity_score"].to_numpy(),
+            "QED (drug-likeness only)": subset["qed_score"].to_numpy(),
+            "random ordering": rng.random(len(subset)),
         }
+        if agent_ranking_meta is not None:
+            scores_by_method[AGENT_METHOD] = subset["agent_score"].to_numpy()
         for name, scores in scores_by_method.items():
             metrics = evaluate(scores, labels)
             collected[name].append(
@@ -251,8 +320,36 @@ def build(
         )
     )
 
-    similarity_auc = float(np.mean([r["ROC_AUC"] for r in collected[method_names[0]]]))
-    qed_auc = float(np.mean([r["ROC_AUC"] for r in collected[method_names[1]]]))
+    similarity_name = f"ECFP4 similarity to {n_reference_actives} known actives"
+    similarity_auc = float(np.mean([r["ROC_AUC"] for r in collected[similarity_name]]))
+    qed_auc = float(np.mean([r["ROC_AUC"] for r in collected["QED (drug-likeness only)"]]))
+
+    agent_paragraph = ""
+    if agent_ranking_meta is not None:
+        agent_auc = float(np.mean([r["ROC_AUC"] for r in collected[AGENT_METHOD]]))
+        if agent_auc > similarity_auc:
+            verdict = (
+                f"the agent beats it ({agent_auc:.3f} vs {similarity_auc:.3f}). That is "
+                "the result worth having, and it is the one to be most suspicious of -- "
+                "check the negative-set bias verdict above before believing it."
+            )
+        else:
+            verdict = (
+                f"the agent does not beat it ({agent_auc:.3f} vs {similarity_auc:.3f}). "
+                "This is reported because it is true. An agent that reasons fluently "
+                "about medicinal chemistry and still loses to a millisecond of Tanimoto "
+                "arithmetic is the normal outcome, and a benchmark that could not "
+                "produce this row would not be measuring anything."
+            )
+        agent_paragraph = (
+            f"\n\nThird, **the agent is on the board as a method, not as a narrator.** "
+            f"It received the same {n_reference_actives} reference actives as the "
+            f"similarity baseline and no labels, scored "
+            f"{agent_ranking_meta['n_scored']}/{agent_ranking_meta['n_candidates']} "
+            f"candidates ({agent_ranking_meta['coverage']:.1%} coverage), and "
+            f"{verdict}"
+        )
+
     report.add(
         Section(
             title="Interpretation",
@@ -268,8 +365,13 @@ def build(
                 "costs milliseconds and requires no protein structure. A docking protocol "
                 "that does not clearly beat this row is not paying for its runtime, however "
                 "physically satisfying its poses look."
+                + agent_paragraph
             ),
-            data={"similarity_auc": similarity_auc, "qed_auc": qed_auc},
+            data={
+                "similarity_auc": similarity_auc,
+                "qed_auc": qed_auc,
+                "agent": agent_ranking_meta,
+            },
         )
     )
 
