@@ -32,14 +32,21 @@ COPY --chown=user . /app
 
 # The package itself, plus Gradio for the interface. Installed after the conda
 # step so a change to the Python code does not invalidate the slow layer.
-# gradio 4.x imports HfFolder from huggingface_hub, which was removed in
-# huggingface_hub 1.0. Unpinned, pip resolves to the new hub and the container
-# dies on import before anything runs. Pinning the hub below 1.0 keeps the
-# pair that actually works together; upgrading gradio to 5.x would be the other
-# way to fix it, but that changes the component API this app is written
-# against and could not be tested here.
+# gradio 5, not a pinned 4.x.
+#
+# Pinning gradio 4.44.1 against a moving ecosystem failed twice in a row, for
+# unrelated reasons each time: first huggingface_hub 1.0 removed HfFolder,
+# which gradio 4 imports at module load; then a newer starlette changed
+# TemplateResponse so gradio 4's positional call passed a dict where a template
+# name was expected, and every page 500'd. Holding an old gradio in place would
+# have meant pinning the hub, starlette and fastapi too, and re-pinning each
+# time one of them moved.
+#
+# gradio 5 is built against the current stack. Every component this app uses --
+# Blocks, Tab, Row, Textbox, Checkbox, Button, Markdown, Examples, themes --
+# is unchanged between 4 and 5, so the migration touches nothing in app.py.
 RUN pip install --no-cache-dir -e . \
-    && pip install --no-cache-dir "huggingface_hub<1.0" "gradio==4.44.1"
+    && pip install --no-cache-dir "gradio>=5.9,<6"
 
 # /app is created by WORKDIR as root; the process runs as uid 1000 and the
 # workflows write reports. Same class of failure as a read-only cache dir, and

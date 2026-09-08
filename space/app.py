@@ -196,4 +196,9 @@ if __name__ == "__main__":
     demo.queue(max_size=16).launch(
         server_name=os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0"),
         server_port=int(os.environ.get("GRADIO_SERVER_PORT", "7860")),
+        # gradio 5 renders server-side by default, which wants a Node runtime
+        # that is not in this image. Without this the app starts and then fails
+        # to serve a page, which looks like a networking problem rather than a
+        # missing dependency.
+        ssr_mode=False,
     )
