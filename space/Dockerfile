@@ -32,8 +32,19 @@ COPY --chown=user . /app
 
 # The package itself, plus Gradio for the interface. Installed after the conda
 # step so a change to the Python code does not invalidate the slow layer.
+# gradio 4.x imports HfFolder from huggingface_hub, which was removed in
+# huggingface_hub 1.0. Unpinned, pip resolves to the new hub and the container
+# dies on import before anything runs. Pinning the hub below 1.0 keeps the
+# pair that actually works together; upgrading gradio to 5.x would be the other
+# way to fix it, but that changes the component API this app is written
+# against and could not be tested here.
 RUN pip install --no-cache-dir -e . \
-    && pip install --no-cache-dir gradio==4.44.1
+    && pip install --no-cache-dir "huggingface_hub<1.0" "gradio==4.44.1"
+
+# /app is created by WORKDIR as root; the process runs as uid 1000 and the
+# workflows write reports. Same class of failure as a read-only cache dir, and
+# it surfaces as a 500 rather than as anything that names the real cause.
+RUN mkdir -p /tmp/runs /tmp/mpl && chown -R user:user /tmp/runs /tmp/mpl /app
 
 USER user
 EXPOSE 7860
